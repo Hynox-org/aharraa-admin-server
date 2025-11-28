@@ -31,7 +31,7 @@ const UserSchema = new mongoose.Schema({
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
-  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  role: { type: String, enum: ['user', 'admin', 'vendor'], default: 'user' },
   emailVerified: { type: Boolean, default: false }, // Add this
 });
 

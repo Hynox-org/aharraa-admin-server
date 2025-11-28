@@ -97,8 +97,9 @@ router.post('/login', async (req, res) => {
     }
 
     // Check if the user has an admin role
-    if (user.role !== 'admin') {
-      return res.status(403).json({ message: 'Access Denied: Not an admin' });
+    if (user.role !== 'admin' && user.role !== 'vendor') {
+      console.log(user.role);
+      return res.status(403).json({ message: 'Access Denied' });
     }
 
     res.status(200).json({

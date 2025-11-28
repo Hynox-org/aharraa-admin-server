@@ -36,11 +36,11 @@ const protect = async (req, res, next) => {
 };
 
 const adminProtect = (req, res, next) => {
-  if (req.user && req.user.role === "admin") {
+  if (req.user && (req.user.role === "admin"|| req.user.role === "vendor")) {
     next();
   } else {
-    res.status(403).json({ message: "Not authorized as an admin" });
+    res.status(403).json({ message: "Not authorized" });
   }
 };
 
-module.exports = { protect, adminProtect };
+module.exports = { protect, adminProtect};

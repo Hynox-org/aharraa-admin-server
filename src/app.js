@@ -10,7 +10,7 @@ const swaggerUi = require('swagger-ui-express');
 
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
-// const vendorRoutes = require('./routes/vendors');
+const vendorRoutes = require('./routes/vendor');
 // const mealRoutes = require('./routes/meals');
 // const planRoutes = require('./routes/plans');
 // const accompanimentRoutes = require('./routes/accompaniments');
@@ -65,7 +65,7 @@ app.get('/docs.json', (req, res) => res.json(swaggerSpec));
 // Routes
 app.use('/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
-// app.use('/api/vendors', vendorRoutes);
+app.use('/api/vendor', vendorRoutes);
 // app.use('/api/meals', mealRoutes);
 // app.use('/api/plans', planRoutes);
 // app.use('/api/accompaniments', accompanimentRoutes);
