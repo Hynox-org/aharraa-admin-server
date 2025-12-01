@@ -7,7 +7,7 @@ const { protect, adminProtect } = require('../middleware/auth');
 const { supabaseAnon, supabaseServiceRole } = require('../config/supabase');
 
 router.post('/new', protect, async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, companyName, email, password } = req.body;
 
   try {
     // Check if user already exists in MongoDB
@@ -36,6 +36,16 @@ router.post('/new', protect, async (req, res) => {
       role: 'vendor'
     });
     await user.save();
+    // ---- Create Vendor Document ----
+    const Vendor = require('../models/Vendor'); // Adjust path if needed
+    const newVendor = new Vendor({
+      name,
+      email,
+      // Save the company name as description or add a new field to schema if needed
+      description: companyName, // Or use: companyName: companyName, if you add field
+      userId: [user._id]
+    });
+    await newVendor.save();
 
     // Generate a session for the newly created user (optional, but useful for immediate login)
     const { data: signInData, error: signInError } = await supabaseAnon.auth.signInWithPassword({
