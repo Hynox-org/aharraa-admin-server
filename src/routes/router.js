@@ -13,23 +13,42 @@ const User = require('../models/User');
 const Vendor = require('../models/Vendor');
 const { supabaseAnon, supabaseServiceRole } = require('../config/supabase');
 
-// Admin Creation
-// This route will be protected by 'protect' middleware, meaning only authenticated users can register a new admin.
+// Helper to get vendor filter
+async function getVendorFilter(req, baseFilter = {}) {
+  if (req.user.role === 'admin') return baseFilter;
+
+  if (req.user.role === 'vendor') {
+    const vendor = await Vendor.findOne({ userId: req.user._id });
+    if (!vendor) return { ...baseFilter, _id: null }; // no results
+    return { ...baseFilter, vendor: vendor._id }; // Adjust field name as needed
+  }
+
+  // Deny access for others
+  throw new Error('FORBIDDEN');
+}
+
+// Middleware to allow only admin or vendor roles
+function allowAdminOrVendor(req, res, next) {
+  if (!req.user || !['admin', 'vendor'].includes(req.user.role)) {
+    return res.status(403).json({ message: 'Access denied' });
+  }
+  next();
+}
+
+// Admin Creation (no role check here)
 router.post('/register', protect, async (req, res) => {
   const { name, email, password } = req.body;
 
   try {
-    // Check if user already exists in MongoDB
     let user = await User.findOne({ email });
     if (user) {
       return res.status(400).json({ message: 'User with this email already exists.' });
     }
 
-    // Create user in Supabase Auth
     const { data: supabaseAuthData, error: supabaseAuthError } = await supabaseServiceRole.auth.admin.createUser({
       email,
       password,
-      email_confirm: true, // Auto-confirm email for admin users
+      email_confirm: true,
     });
 
     if (supabaseAuthError) {
@@ -37,152 +56,137 @@ router.post('/register', protect, async (req, res) => {
       return res.status(400).json({ message: supabaseAuthError.message });
     }
 
-    // Save user data to MongoDB with admin role
     user = new User({
       name,
       email,
       supabaseId: supabaseAuthData.user.id,
-      role: 'admin'
+      role: 'admin',
     });
     await user.save();
 
-    // Generate a session for the newly created user (optional, but useful for immediate login)
     const { data: signInData, error: signInError } = await supabaseAnon.auth.signInWithPassword({
-        email,
-        password,
+      email,
+      password,
     });
 
     if (signInError) {
-        console.error('Supabase admin auto-login error:', signInError);
-        return res.status(500).json({ message: 'Admin registered but failed to auto-login.' });
+      console.error('Supabase admin auto-login error:', signInError);
+      return res.status(500).json({ message: 'Admin registered but failed to auto-login.' });
     }
 
     res.status(201).json({
       message: 'Admin registered successfully',
       accessToken: signInData.session.access_token,
-      role: user.role
+      role: user.role,
     });
-
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server error');
   }
 });
 
-// Admin Login - Endpoint : /api/admin/login
-// This route is not protected by any middleware, allowing any user to attempt login.
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
+// Vendor Creation (no role check here)
+router.post('/vendor/new', protect, async (req, res) => {
+  const { name, companyName, email, password } = req.body;
 
   try {
-    // Authenticate user with Supabase Auth
-    const { data, error: supabaseError } = await supabaseAnon.auth.signInWithPassword({
+    let user = await User.findOne({ email });
+    if (user) {
+      return res.status(400).json({ message: 'User with this email already exists.' });
+    }
+
+    const { data: supabaseAuthData, error: supabaseAuthError } = await supabaseServiceRole.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    });
+
+    if (supabaseAuthError) {
+      console.error('Supabase vendor user creation error:', supabaseAuthError);
+      return res.status(400).json({ message: supabaseAuthError.message });
+    }
+
+    user = new User({
+      name,
+      email,
+      supabaseId: supabaseAuthData.user.id,
+      role: 'vendor',
+    });
+    await user.save();
+
+    const newVendor = new Vendor({
+      name,
+      email,
+      description: companyName,
+      userId: [user._id],
+    });
+    await newVendor.save();
+
+    const { data: signInData, error: signInError } = await supabaseAnon.auth.signInWithPassword({
       email,
       password,
     });
 
-    if (supabaseError) {
-      console.error('Supabase login error:', supabaseError);
-      return res.status(401).json({ message: 'Invalid credentials' });
+    if (signInError) {
+      console.error('Supabase vendor auto-login error:', signInError);
+      return res.status(500).json({ message: 'Vendor registered but failed to auto-login.' });
     }
 
-    if (!data || !data.user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    // Find user in MongoDB using supabaseId to check role
-    const user = await User.findOne({ supabaseId: data.user.id });
-    if (!user) {
-      return res.status(401).json({ message: 'User not found in database' });
-    }
-
-    // Check if the user has an admin role
-    if (user.role !== 'admin' && user.role !== 'vendor') {
-      console.log(user.role);
-      return res.status(403).json({ message: 'Access Denied' });
-    }
-
-    res.status(200).json({
-      message: 'Login successful',
-      accessToken: data.session.access_token,
-      role: user.role
+    res.status(201).json({
+      message: 'Vendor registered successfully',
+      accessToken: signInData.session.access_token,
+      role: user.role,
     });
-
   } catch (err) {
     console.error(err.message);
-    res.status(500).send('Server error');
+    res.status(500).json('Server error');
   }
 });
+
+// Protect and allow only admin or vendor for all routes below
+router.use(protect, allowAdminOrVendor);
 
 // Get all Accompaniments
 router.get('/accompaniments', async (req, res) => {
   try {
-    const accompaniments = await Accompaniment.find();
+    const filter = await getVendorFilter(req);
+    const accompaniments = await Accompaniment.find(filter);
     res.json(accompaniments);
   } catch (err) {
+    if (err.message === 'FORBIDDEN') return res.status(403).json({ message: 'Access denied' });
     console.error(err.message);
     res.status(500).send('Server Error');
   }
 });
 
 // Get all Carts
-// router.get('/carts', async (req, res) => {
-//   try {
-//     const carts = await Cart.find()
-//       .populate('user', 'name email')
-//       .populate({
-//         path: 'cartItems',
-//         populate: {
-//           path: 'meal',
-//           model: 'Meal',
-//           populate: {
-//             path: 'vendor menu',
-//             select: 'name title',
-//           }
-//         }
-//       })
-      
-//       .populate({
-//         path: 'cartItems',
-//         populate: {
-//           path: 'accompaniments',
-//           model: 'Accompaniment',
-//           select: 'name price'
-//         }
-//       });
-//     res.json(carts);
-//   } catch (err) {
-//     console.error(err.message);
-//     res.status(500).send('Server Error');
-//   }
-// });
 router.get('/carts', async (req, res) => {
   try {
-    const carts = await Cart.find()
-      // .populate('user', 'name email')   // populate cart owner
+    let filter = {};
+    if (req.user.role === 'vendor') {
+      const vendor = await Vendor.findOne({ userId: req.user._id });
+      if (!vendor) return res.json([]);
+      filter = { vendor: vendor._id }; // Adjust field if needed
+    }
 
-      // populate items inside cart
+    const carts = await Cart.find(filter)
       .populate({
         path: 'items',
         populate: [
-          // populate menu inside CartItem
           {
             path: 'menu',
             model: 'Menu',
             populate: {
-              path: 'vendor',  // Menu -> vendorId
+              path: 'vendor',
               model: 'Vendor',
               select: 'name title'
             }
           },
-          // populate plan inside CartItem
           {
             path: 'accompaniments',
-            model: 'Accompanimentlan',
+            model: 'Accompaniment',
             select: 'name price'
           },
-
-          // populate user inside each CartItem
           {
             path: 'user',
             model: 'User',
@@ -192,7 +196,6 @@ router.get('/carts', async (req, res) => {
       });
 
     res.json(carts);
-
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');
@@ -200,30 +203,16 @@ router.get('/carts', async (req, res) => {
 });
 
 // Get all CartItems
-// router.get('/cartitems', async (req, res) => {
-//   try {
-//     const cartItems = await CartItem.find()
-//       .populate('cart')
-//       .populate({
-//         path: 'meal',
-//         populate: {
-//           path: 'vendor menu',
-//           select: 'name title'
-//         }
-//       })
-//       .populate('accompaniments', 'name price');
-//     res.json(cartItems);
-//   } catch (err) {
-//     console.error(err.message);
-//     res.status(500).send('Server Error');
-//   }
-// });
-
 router.get('/cartitems', async (req, res) => {
   try {
-    const cartItems = await CartItem.find()
-      // .populate('cart')
-      // .populate('user', 'name email')
+    let filter = {};
+    if (req.user.role === 'vendor') {
+      const vendor = await Vendor.findOne({ userId: req.user._id });
+      if (!vendor) return res.json([]);
+      filter = { vendor: vendor._id }; // Adjust field if needed
+    }
+
+    const cartItems = await CartItem.find(filter)
       .populate({
         path: 'menu',
         model: 'Menu',
@@ -232,26 +221,20 @@ router.get('/cartitems', async (req, res) => {
           model: 'Vendor',
           select: 'name title'
         }
-      })
-      // .populate('accompaniments', 'name price');
-      res.json(cartItems);
+      });
+
+    res.json(cartItems);
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');
   }
 });
 
-// Get all DeliveryAddresses
-// router.get('/deliveryaddresses', async (req, res) => {
-//   try {
-//     const deliveryAddresses = await DeliveryAddress.find().populate('user', 'name email');
-//     res.json(deliveryAddresses);
-//   } catch (err) {
-//     console.error(err.message);
-//     res.status(500).send('Server Error');
-//   }
-// });
+// Get all DeliveryAddresses (admin only)
 router.get('/deliveryaddresses', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Access denied' });
+  }
   try {
     const deliveryAddresses = await DeliveryAddress.find()
       .populate('userId', 'name email');
@@ -263,21 +246,15 @@ router.get('/deliveryaddresses', async (req, res) => {
 });
 
 // Get all Meals
-// router.get('/meals', async (req, res) => {
-//   try {
-//     const meals = await Meal.find()
-//       .populate('vendorId', 'name email')
-//       .populate('menu', 'title')
-//       .populate('accompaniments', 'name price');
-//     res.json(meals);
-//   } catch (err) {
-//     console.error(err.message);
-//     res.status(500).send('Server Error');
-//   }
-// });
 router.get('/meals', async (req, res) => {
   try {
-    const meals = await Meal.find()
+    let filter = {};
+    if (req.user.role === 'vendor') {
+      const vendor = await Vendor.findOne({ userId: req.user._id });
+      if (!vendor) return res.json([]);
+      filter = { vendorId: vendor._id };
+    }
+    const meals = await Meal.find(filter)
       .populate('vendorId', 'name email');
     res.json(meals);
   } catch (err) {
@@ -287,18 +264,16 @@ router.get('/meals', async (req, res) => {
 });
 
 // Get all Menus
-// router.get('/menus', async (req, res) => {
-//   try {
-//     const menus = await Menu.find().populate('vendor', 'name email');
-//     res.json(menus);
-//   } catch (err) {
-//     console.error(err.message);
-//     res.status(500).send('Server Error');
-//   }
-// });
 router.get('/menus', async (req, res) => {
   try {
-    const menus = await Menu.find()
+    let filter = {};
+    if (req.user.role === 'vendor') {
+      const vendor = await Vendor.findOne({ userId: req.user._id });
+      if (!vendor) return res.json([]);
+      filter = { vendor: vendor._id };
+    }
+
+    const menus = await Menu.find(filter)
       .populate('vendor', 'name email')
       .populate({
         path: 'menuItems.meal',
@@ -319,23 +294,31 @@ router.get('/menus', async (req, res) => {
 // Get all Orders
 router.get('/orders', async (req, res) => {
   try {
-    const orders = await Order.find()
+    let filter = {};
+    if (req.user.role === 'vendor') {
+      const vendor = await Vendor.findOne({ userId: req.user._id });
+      if (!vendor) return res.json([]);
+      filter = { 'items.vendor': vendor._id };
+    }
+
+    const orders = await Order.find(filter)
       .populate('user', 'name email')
       .populate({
-        path: 'items.vendor', // Correct path for vendor within items
+        path: 'items.vendor',
         model: 'Vendor',
         select: 'name email'
       })
       .populate({
         path: 'items.menu',
         model: 'Menu',
-        select: 'name description' // Added description for Menu
+        select: 'name description'
       })
       .populate({
         path: 'items.plan',
         model: 'Plan',
-        select: 'name description duration price' // Added more fields for Plan
+        select: 'name description duration price'
       });
+
     res.json(orders);
   } catch (err) {
     console.error(err.message);
@@ -343,30 +326,44 @@ router.get('/orders', async (req, res) => {
   }
 });
 
-// Get a single Order by ID
+// Get single Order by ID
 router.get('/orders/:id', async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
       .populate('user', 'name email')
       .populate({
-        path: 'items.vendor', // Correct path for vendor within items
+        path: 'items.vendor',
         model: 'Vendor',
         select: 'name email'
       })
       .populate({
         path: 'items.menu',
         model: 'Menu',
-        select: 'name description' // Added description for Menu
+        select: 'name description'
       })
       .populate({
         path: 'items.plan',
         model: 'Plan',
-        select: 'name description duration price' // Added more fields for Plan
+        select: 'name description duration price'
       });
 
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
+
+    // if (req.user.role === 'vendor') {
+    //   const vendor = await Vendor.findOne({ userId: req.user._id });
+    //   if (!vendor) return res.status(403).json({ message: 'Access denied' });
+
+    //   const hasAccess = order.items.some(
+    //     (item) => String(item.vendor) === String(vendor._id)
+    //   );
+
+    //   if (!hasAccess) {
+    //     return res.status(403).json({ message: 'Access denied' });
+    //   }
+    // }
+
     res.json(order);
   } catch (err) {
     console.error(err.message);
@@ -380,7 +377,7 @@ router.get('/orders/:id', async (req, res) => {
 // Get all Plans
 router.get('/plans', async (req, res) => {
   try {
-    // const plans = await Plan.find().populate('vendor', 'name email');
+    // Adjust here if Plans should be vendor-scoped
     const plans = await Plan.find();
     res.json(plans);
   } catch (err) {
@@ -389,10 +386,13 @@ router.get('/plans', async (req, res) => {
   }
 });
 
-// Get all Users
+// Get all Users (admin only)
 router.get('/users', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Access denied' });
+  }
   try {
-    const users = await User.find(); // Removed population for 'orders'
+    const users = await User.find();
     res.json(users);
   } catch (err) {
     console.error(err.message);
@@ -400,8 +400,11 @@ router.get('/users', async (req, res) => {
   }
 });
 
-// Get all Vendors
+// Get all Vendors (admin only)
 router.get('/vendors', async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Access denied' });
+  }
   try {
     const vendors = await Vendor.find();
     res.json(vendors);
@@ -410,8 +413,5 @@ router.get('/vendors', async (req, res) => {
     res.status(500).send('Server Error');
   }
 });
-
-// Apply protect and adminProtect middleware to all admin data fetching routes below this point
-router.use(protect, adminProtect);
 
 module.exports = router;

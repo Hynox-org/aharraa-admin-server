@@ -27,206 +27,12 @@ const resetPasswordSchema = Joi.object({
   newPassword: Joi.string().min(8).required()
 });
 
-/**
- * @openapi
- * /api/auth/register:
- *   post:
- *     summary: Register a new user
- *     tags:
- *       - Auth
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - name
- *               - email
- *               - password
- *             properties:
- *               name:
- *                 type: string
- *               email:
- *                 type: string
- *                 format: email
- *               password:
- *                 type: string
- *                 minLength: 6
- *     responses:
- *       201:
- *         description: User registered successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 accessToken:
- *                   type: string
- *                 message:
- *                   type: string
- *       400:
- *         description: Email already exists or validation error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- */
-router.post("/signup", async (req, res) => {
+
+// This route is not protected by any middleware, allowing any user to attempt login.
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+
   try {
-    const { error: validationError } = registerSchema.validate(req.body);
-    if (validationError) {
-      return res.status(400).json({ message: validationError.details[0].message });
-    }
-
-    const { name, email, password } = req.body;
-
-    // Check if user already exists in MongoDB
-    let user = await User.findOne({ email });
-    if (user) {
-      return res.status(400).json({ message: "Email already exists" });
-    }
-
-    // Register user with Supabase Auth (with email confirmation)
-    const { data, error: supabaseError } = await supabaseAnon.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${process.env.NEXT_FRONTEND_BASE_URL}/auth/confirm`, // Redirect after email confirmation
-        data: {
-          name: name, // Pass the name to Supabase user metadata
-        },
-      }
-    });
-
-    if (supabaseError) {
-      console.error("Supabase registration error:", supabaseError);
-      return res.status(400).json({ message: supabaseError.message });
-    }
-
-    if (!data || !data.user) {
-      return res.status(500).json({ message: "Supabase registration failed: No user data returned." });
-    }
-
-    // Save user data to MongoDB (mark as unverified initially)
-    user = new User({ 
-      name, 
-      email, 
-      supabaseId: data.user.id,
-      emailVerified: false // Add this field to track verification
-    });
-    await user.save();
-
-    // When email confirmation is enabled, session will be null
-    res.status(201).json({
-      message: "Registration successful! Please check your email to confirm your account.",
-      requiresEmailConfirmation: true,
-      // Do NOT return accessToken here since user is unconfirmed
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-router.post("/resend-confirmation", async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ message: "Email is required" });
-    }
-
-    // Check if user exists and is unconfirmed
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    if (user.emailVerified) {
-      return res.status(400).json({ message: "Email already confirmed" });
-    }
-
-    // Resend confirmation email via Supabase
-    const { error } = await supabaseAnon.auth.resend({
-      type: 'signup',
-      email: email,
-      options: {
-        emailRedirectTo: `${process.env.FRONTEND_URL}/auth/confirm`
-      }
-    });
-
-    if (error) {
-      console.error("Supabase resend error:", error);
-      return res.status(400).json({ message: error.message });
-    }
-
-    res.status(200).json({ 
-      message: "Confirmation email resent successfully" 
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-
-/**
- * @openapi
- * /api/auth/login:
- *   post:
- *     summary: Authenticate a user and provide an access token
- *     tags:
- *       - Auth
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *             properties:
- *               email:
- *                 type: string
- *                 format: email
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Login successful
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 accessToken:
- *                   type: string
- *                 message:
- *                   type: string
- *       401:
- *         description: Invalid credentials
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- */
-router.post("/signin", async (req, res) => {
-  try {
-    const { error: validationError } = loginSchema.validate(req.body);
-    if (validationError) {
-      return res.status(400).json({ message: validationError.details[0].message });
-    }
-
-    const { email, password } = req.body;
-
     // Authenticate user with Supabase Auth
     const { data, error: supabaseError } = await supabaseAnon.auth.signInWithPassword({
       email,
@@ -234,30 +40,29 @@ router.post("/signin", async (req, res) => {
     });
 
     if (supabaseError) {
-      console.error("Supabase login error:", supabaseError);
-      return res.status(401).json({ message: "Invalid credentials" });
+      console.error('Supabase login error:', supabaseError);
+      return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     if (!data || !data.user) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Find user in MongoDB using supabaseId
+    // Find user in MongoDB using supabaseId to check role
     const user = await User.findOne({ supabaseId: data.user.id });
     if (!user) {
-      // This case should ideally not happen if registration flow is correct
-      return res.status(401).json({ message: "User not found in database" });
+      return res.status(401).json({ message: 'User not found in database' });
     }
 
-    // Return Supabase access token
     res.status(200).json({
-      message: "Login successful",
+      message: 'Login successful',
       accessToken: data.session.access_token,
-      role: user.role, // Include role in response
+      role: user.role
     });
+
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: "Internal server error" });
+    console.error(err.message);
+    res.status(500).send('Server error');
   }
 });
 
