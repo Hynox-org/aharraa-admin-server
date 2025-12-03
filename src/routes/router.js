@@ -86,7 +86,7 @@ router.post('/register', protect, async (req, res) => {
 });
 
 // Vendor Creation (no role check here)
-router.post('/vendor/new', protect, async (req, res) => {
+router.post('/vendor/new', protect , async (req, res) => {
   const { name, companyName, email, password } = req.body;
 
   try {
@@ -145,7 +145,6 @@ router.post('/vendor/new', protect, async (req, res) => {
 
 // Protect and allow only admin or vendor for all routes below
 router.use(protect, allowAdminOrVendor);
-
 // Get all Accompaniments
 router.get('/accompaniments', async (req, res) => {
   try {
@@ -411,6 +410,353 @@ router.get('/vendors', async (req, res) => {
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');
+  }
+});
+/**
+ * @openapi
+ * /api/admin/meals:
+ *   post:
+ *     summary: Create a new meal
+ *     tags:
+ *       - Admin
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - description
+ *               - dietPreference
+ *               - category
+ *               - nutritionalDetails
+ *               - price
+ *               - image
+ *               - vendorId
+ *             properties:
+ *               name:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               dietPreference:
+ *                 type: string
+ *                 enum: [All, Veg, Non-Veg, Vegan, Custom]
+ *               category:
+ *                 type: string
+ *                 enum: [Breakfast, Lunch, Dinner]
+ *               subProducts:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               nutritionalDetails:
+ *                 type: object
+ *                 properties:
+ *                   protein:
+ *                     type: number
+ *                   carbs:
+ *                     type: number
+ *                   fats:
+ *                     type: number
+ *                   calories:
+ *                     type: number
+ *               price:
+ *                 type: number
+ *               image:
+ *                 type: string
+ *               vendorId:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Meal created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 _id:
+ *                   type: string
+ *                 message:
+ *                   type: string
+ */
+router.post('/meals', async (req, res) => {
+  try {
+    // ✅ Verify token
+    // const authHeader = req.headers.authorization;
+    // if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    //   return res.status(401).json({ message: 'Authorization token required' });
+    // }
+
+    // const token = authHeader.split(' ')[1];
+    // const { data: supabaseUser, error: supabaseError } = await supabaseAnon.auth.getUser(token);
+
+    // if (supabaseError || !supabaseUser || !supabaseUser.user) {
+    //   return res.status(401).json({ message: 'Invalid or expired token' });
+    // }
+
+    const { 
+      name, 
+      description, 
+      dietPreference, 
+      category, 
+      subProducts = [], 
+      nutritionalDetails, 
+      price, 
+      image, 
+      vendorId 
+    } = req.body;
+
+    // ✅ Validate required fields per schema
+    if (!name || !description || !dietPreference || !category || !nutritionalDetails || 
+        nutritionalDetails.protein === undefined || nutritionalDetails.carbs === undefined || 
+        nutritionalDetails.fats === undefined || nutritionalDetails.calories === undefined ||
+        !price || !image || !vendorId) {
+      return res.status(400).json({ 
+        message: 'Missing required fields: name, description, dietPreference, category, nutritionalDetails (all fields), price, image, vendorId' 
+      });
+    }
+
+    // ✅ Find vendor (User) - schema uses 'Vendor' ref but User model exists
+    const vendor = await User.findById(vendorId);
+    if (!vendor || vendor.supabaseId !== supabaseUser.user.id) {
+      return res.status(401).json({ message: 'Vendor not found or unauthorized' });
+    }
+
+    // ✅ Create meal matching EXACT schema
+    const meal = new Meal({
+      name,
+      description,
+      dietPreference,
+      category,
+      subProducts: subProducts.filter(p => p && p.trim()), // Clean empty strings
+      nutritionalDetails, // Already validated above
+      price,
+      image,
+      vendorId, // Schema uses vendorId ref 'Vendor'
+    });
+
+    const savedMeal = await meal.save();
+
+    res.status(201).json({
+      _id: savedMeal._id,
+      message: 'Meal created successfully',
+    });
+
+  } catch (err) {
+    console.error('Meal creation error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/menus:
+ *   post:
+ *     summary: Create a complete weekly menu
+ *     tags:
+ *       - Admin
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - vendor
+ *               - perDayPrice
+ *               - menuItems
+ *             properties:
+ *               name:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               perDayPrice:
+ *                 type: number
+ *               availableMealTimes:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   enum: [Breakfast, Lunch, Dinner]
+ *               price:
+ *                 type: object
+ *                 properties:
+ *                   breakfast:
+ *                     type: number
+ *                   lunch:
+ *                     type: number
+ *                   dinner:
+ *                     type: number
+ *               menuItems:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     day:
+ *                       type: string
+ *                       enum: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
+ *                     category:
+ *                       type: string
+ *                       enum: [Breakfast, Lunch, Dinner]
+ *                     meal:
+ *                       type: string
+ *               vendor:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Menu created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 _id:
+ *                   type: string
+ *                 message:
+ *                   type: string
+ */
+router.post('/menus', async (req, res) => {
+  try {
+    // ✅ Verify token
+    // const authHeader = req.headers.authorization;
+    // if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    //   return res.status(401).json({ message: 'Authorization token required' });
+    // }
+
+    // const token = authHeader.split(' ')[1];
+    // const { data: supabaseUser, error: supabaseError } = await supabaseAnon.auth.getUser(token);
+
+    // if (supabaseError || !supabaseUser || !supabaseUser.user) {
+    //   return res.status(401).json({ message: 'Invalid or expired token' });
+    // }
+
+    console.log("✅ MENU BODY FULL:", JSON.stringify(req.body, null, 2));
+    const body = req.body;
+    
+    console.log('🔍 name:', body.name);
+    console.log('🔍 perDayPrice:', body.perDayPrice);
+    console.log('🔍 menuItems length:', body.menuItems?.length);
+    console.log('🔍 vendor:', body.vendor);
+
+    const name = body.name;
+    const perDayPrice = body.perDayPrice || 0;
+    const menuItems = body.menuItems || [];
+    const vendor = body.vendor;
+
+    console.log('🔢 FINAL perDayPrice:', perDayPrice);
+
+    //  Schema validation - direct access
+    if (!name || perDayPrice === undefined || perDayPrice === null || !menuItems || !vendor) {
+      console.log('❌ Validation failed:', { name, perDayPrice, menuItems: !!menuItems, vendor });
+      return res.status(400).json({ 
+        message: 'Missing required fields: name, perDayPrice, menuItems, vendor',
+        debug: { name, perDayPrice, hasMenuItems: !!menuItems, vendor }
+      });
+    }
+
+    if (!Array.isArray(menuItems) || menuItems.length === 0) {
+      return res.status(400).json({ message: 'menuItems must be a non-empty array' });
+    }
+
+    //  Validate each menu item
+    for (const item of menuItems) {
+      if (!item.day || !item.category || !item.meal) {
+        return res.status(400).json({ 
+          message: 'Each menu item must have day, category, and meal fields' 
+        });
+      }
+    }
+
+    //  Find vendor (use Vendor model since schema refs 'Vendor')
+    const vendorDoc = await Vendor.findOne({ userId: vendor });
+    if (!vendorDoc) {
+      return res.status(401).json({ message: 'Vendor not found' });
+    }
+
+    //  Create menu
+    const menu = new Menu({
+      name,
+      vendor: vendorDoc._id, // Use Vendor _id, not User _id
+      description: body.description || '',
+      perDayPrice, // Now correctly set to 250
+      availableMealTimes: body.availableMealTimes || [],
+      price: body.price || { breakfast: 0, lunch: 0, dinner: 0 },
+      menuItems,
+    });
+
+    const savedMenu = await menu.save();
+
+    console.log('✅ Menu created:', savedMenu._id);
+
+    res.status(201).json({
+      _id: savedMenu._id,
+      message: 'Menu created successfully',
+    });
+
+  } catch (err) {
+    console.error('Menu creation error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+router.patch('/orders/:id/status',protect, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const orderId = req.params.id;
+    console.log('Update order status request:', { orderId, status, userRole: req.user.role });
+    if (!status) {
+      return res.status(400).json({ message: 'Status is required' });
+    }
+
+    // Allowed statuses by role
+    const adminAllowed = [ 'readyForDelivery', 'delivered', 'cancelled'];
+    const vendorAllowed = ['readyForDelivery'];
+
+    const normalized = status.toString().trim();
+
+    if (req.user.role === 'admin') {
+      if (!adminAllowed.includes(normalized)) {
+        return res.status(400).json({ message: 'Invalid status for admin' });
+      }
+    } else if (req.user.role === 'vendor') {
+      if (!vendorAllowed.includes(normalized)) {
+        return res.status(400).json({ message: 'Invalid status for vendor' });
+      }
+    } else {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Find order
+    let filter = { _id: orderId };
+    if (req.user.role === 'vendor') {
+      // Ensure vendor only updates own orders
+      const vendor = await Vendor.findOne({ userId: req.user._id });
+      if (!vendor) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+      filter['items.vendor'] = vendor._id;
+    }
+
+    const order = await Order.findOne(filter);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    order.status = normalized;
+    await order.save();
+
+    res.status(200).json({
+      message: 'Status updated successfully',
+      status: order.status,
+      orderId: order._id,
+    });
+  } catch (err) {
+    console.error('Update order status error:', err);
+    res.status(500).json({ message: 'Internal server error' });
   }
 });
 

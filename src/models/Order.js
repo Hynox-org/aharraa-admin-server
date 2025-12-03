@@ -65,7 +65,7 @@ const OrderSchema = new mongoose.Schema({
   orderDate: { type: Date, required: true }, // Changed to required as it comes from checkoutDate
   status: {
     type: String,
-    enum: ["pending", "confirmed", "delivered", "cancelled", "failed"],
+    enum: ["pending", "confirmed", "delivered", "cancelled", "failed", "readyForDelivery"],
     default: "pending",
   },
   paymentSessionId: { type: String },
