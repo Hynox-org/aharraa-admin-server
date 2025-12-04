@@ -412,75 +412,7 @@ router.get('/vendors', async (req, res) => {
     res.status(500).send('Server Error');
   }
 });
-/**
- * @openapi
- * /api/admin/meals:
- *   post:
- *     summary: Create a new meal
- *     tags:
- *       - Admin
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - name
- *               - description
- *               - dietPreference
- *               - category
- *               - nutritionalDetails
- *               - price
- *               - image
- *               - vendorId
- *             properties:
- *               name:
- *                 type: string
- *               description:
- *                 type: string
- *               dietPreference:
- *                 type: string
- *                 enum: [All, Veg, Non-Veg, Vegan, Custom]
- *               category:
- *                 type: string
- *                 enum: [Breakfast, Lunch, Dinner]
- *               subProducts:
- *                 type: array
- *                 items:
- *                   type: string
- *               nutritionalDetails:
- *                 type: object
- *                 properties:
- *                   protein:
- *                     type: number
- *                   carbs:
- *                     type: number
- *                   fats:
- *                     type: number
- *                   calories:
- *                     type: number
- *               price:
- *                 type: number
- *               image:
- *                 type: string
- *               vendorId:
- *                 type: string
- *     responses:
- *       201:
- *         description: Meal created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 _id:
- *                   type: string
- *                 message:
- *                   type: string
- */
+
 router.post('/meals', async (req, res) => {
   try {
     // ✅ Verify token
@@ -550,75 +482,6 @@ router.post('/meals', async (req, res) => {
   }
 });
 
-/**
- * @openapi
- * /api/admin/menus:
- *   post:
- *     summary: Create a complete weekly menu
- *     tags:
- *       - Admin
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - name
- *               - vendor
- *               - perDayPrice
- *               - menuItems
- *             properties:
- *               name:
- *                 type: string
- *               description:
- *                 type: string
- *               perDayPrice:
- *                 type: number
- *               availableMealTimes:
- *                 type: array
- *                 items:
- *                   type: string
- *                   enum: [Breakfast, Lunch, Dinner]
- *               price:
- *                 type: object
- *                 properties:
- *                   breakfast:
- *                     type: number
- *                   lunch:
- *                     type: number
- *                   dinner:
- *                     type: number
- *               menuItems:
- *                 type: array
- *                 items:
- *                   type: object
- *                   properties:
- *                     day:
- *                       type: string
- *                       enum: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
- *                     category:
- *                       type: string
- *                       enum: [Breakfast, Lunch, Dinner]
- *                     meal:
- *                       type: string
- *               vendor:
- *                 type: string
- *     responses:
- *       201:
- *         description: Menu created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 _id:
- *                   type: string
- *                 message:
- *                   type: string
- */
 router.post('/menus', async (req, res) => {
   try {
     // ✅ Verify token
@@ -757,6 +620,155 @@ router.patch('/orders/:id/status',protect, async (req, res) => {
   } catch (err) {
     console.error('Update order status error:', err);
     res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Add this route BEFORE the module.exports line
+router.get('/analytics', protect, async (req, res) => {
+  try {
+    let vendorFilter = {};
+    let vendorDoc = null;
+    
+    if (req.user.role === 'vendor') {
+      vendorDoc = await Vendor.findOne({ userId: req.user._id });
+      if (!vendorDoc) {
+        return res.status(403).json({ message: 'Vendor not found' });
+      }
+      vendorFilter = { 'items.vendor': vendorDoc._id };
+    } else if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // 1. Total Orders
+    const totalOrdersCount = await Order.countDocuments(vendorFilter);
+
+    // 2. Pending Orders
+    const pendingOrdersCount = await Order.countDocuments({
+      ...vendorFilter,
+      status: 'pending'
+    });
+
+    // 3. Active Customers (unique users)
+    const activeCustomerIds = await Order.distinct('user', vendorFilter);
+    const activeCustomersCount = activeCustomerIds.length;
+
+    // 4. Revenue Today (confirmed orders from today)
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const revenueTodayResult = await Order.aggregate([
+      {
+        $match: {
+          ...vendorFilter,
+          status: 'confirmed',
+          createdAt: { $gte: startOfDay, $lte: endOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$amount' }
+        }
+      }
+    ]);
+    const revenueToday = revenueTodayResult[0]?.totalRevenue || 0;
+
+    // 5. Recent Orders (last 5)
+    const recentOrders = await Order.find(vendorFilter)
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .populate('user', 'name email')
+      .select('orderId user totalAmount status createdAt items')
+      .lean();
+
+    // 6. FIXED Popular Menus: Handle BOTH cases (with orders AND no orders)
+    let popularMenus = [];
+
+    // Try to get popular menus from orders first
+    let popularMenuIdsAgg = [];
+    try {
+      popularMenuIdsAgg = await Order.aggregate([
+        { $match: vendorFilter },
+        { $unwind: '$items' },
+        {
+          $group: {
+            _id: '$items.menu',
+            ordersCount: { $sum: 1 }
+          }
+        },
+        { $sort: { ordersCount: -1 } },
+        { $limit: 4 }
+      ]);
+    } catch (orderAggError) {
+      console.log('No orders found for popular menus aggregation');
+    }
+
+    if (popularMenuIdsAgg.length > 0) {
+      // CASE 1: Vendor has orders - show top 4 popular menus by order count
+      const popularMenuIds = popularMenuIdsAgg.map(m => m._id);
+      const popularMenusDocs = await Menu.find({ 
+        _id: { $in: popularMenuIds } 
+      })
+        .select('name perDayPrice')
+        .lean();
+
+      popularMenus = popularMenusDocs.map(menu => {
+        const menuOrders = popularMenuIdsAgg.find(m => 
+          m._id.toString() === menu._id.toString()
+        );
+        
+        return {
+          name: menu.name || 'Unknown Menu',
+          orders: menuOrders?.ordersCount || 0,
+          revenue: (menu.perDayPrice || 0) * 7
+        };
+      });
+    } else if (req.user.role === 'vendor' && vendorDoc) {
+      // CASE 2: Vendor has no orders - show their 4 most recent menus
+      console.log('No orders found, showing vendor\'s recent menus');
+      const vendorMenus = await Menu.find({ 
+        vendor: vendorDoc._id 
+      })
+        .sort({ createdAt: -1 }) // Most recent first
+        .limit(4)
+        .select('name perDayPrice')
+        .lean();
+
+      popularMenus = vendorMenus.map(menu => ({
+        name: menu.name || 'Unknown Menu',
+        orders: 0, // No orders yet
+        revenue: (menu.perDayPrice || 0) * 7
+      }));
+    } else {
+      // CASE 3: Admin with no orders or edge case - empty array
+      popularMenus = [];
+    }
+
+    const responseData = {
+      totalOrders: totalOrdersCount,
+      pendingOrders: pendingOrdersCount,
+      activeCustomers: activeCustomersCount,
+      revenueToday,
+      recentOrders: recentOrders.map(order => ({
+        id: order.orderId || order._id,
+        customer: order.user?.name || 'Unknown',
+        items: order.items?.map(item => item.name || 'Item')?.join(', ') || 'Items',
+        amount: order.totalAmount || 0,
+        status: order.status,
+        time: 'Recent'
+      })),
+      popularMenus
+    };
+
+    console.log("response data:", responseData);
+    
+    res.json(responseData);
+
+  } catch (error) {
+    console.error('Analytics error:', error);
+    res.status(500).json({ message: 'Failed to fetch analytics data' });
   }
 });
 
