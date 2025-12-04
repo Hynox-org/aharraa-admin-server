@@ -20,6 +20,7 @@ const protect = async (req, res, next) => {
 
       // Find user in MongoDB using supabaseId
       req.user = await User.findOne({ supabaseId: supabaseUser.user.id });
+      console.log('Authenticated user:', req.user);
       if (!req.user) {
         return res.status(401).json({ message: "Not authorized, user not found in database" });
       }

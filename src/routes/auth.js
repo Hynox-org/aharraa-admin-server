@@ -50,9 +50,11 @@ router.post('/login', async (req, res) => {
 
     // Find user in MongoDB using supabaseId to check role
     const user = await User.findOne({ supabaseId: data.user.id });
-    if (!user) {
-      return res.status(401).json({ message: 'User not found in database' });
+    console.log({userRole : user.role})
+    if(user.role !== 'admin' && user.role !== 'vendor') {
+      return res.status(403).json({ message: 'Access denied ddsdsd: Admins only' });
     }
+
 
     res.status(200).json({
       message: 'Login successful',

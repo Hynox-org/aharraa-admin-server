@@ -628,7 +628,7 @@ router.get('/analytics', protect, async (req, res) => {
   try {
     let vendorFilter = {};
     let vendorDoc = null;
-    
+    console.log('Analytics request by user:', req.user);
     if (req.user.role === 'vendor') {
       vendorDoc = await Vendor.findOne({ userId: req.user._id });
       if (!vendorDoc) {
