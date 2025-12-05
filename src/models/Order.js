@@ -52,6 +52,17 @@ const OrderItemSchema = new mongoose.Schema(
       ref: "Vendor",
       required: true,
     },
+    orderStatus: {
+      type: [{
+        dayDate: { type: Date }, // Actual date (startDate + day offset)
+        statuses: [{
+          type: String,
+          enum: ["pending", "confirmed", "delivered", "cancelled", "failed", "readyForDelivery"],
+          default: 'pending'
+        }]
+      }],
+      default: [],
+    },
   },
   { _id: false }
 );
