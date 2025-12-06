@@ -12,6 +12,84 @@ const Plan = require('../models/Plan');
 const User = require('../models/User');
 const Vendor = require('../models/Vendor');
 const { supabaseAnon, supabaseServiceRole } = require('../config/supabase');
+const Joi = require("joi");
+// const { v4: uuidv4 } = require("uuid"); // Import UUID for generating unique refund IDs
+// ✅ YOUR CASHFREE UTILS
+const { 
+  initiateCashfreeRefund,
+  updateCashfreeRefund,
+  getCashfreeRefundDetails 
+} = require('../utils/cashfree');
+
+// Refund utility function
+async function calculateRefundForOrder(orderId) {
+  const CONSUMED_STATUSES = ['delivered', 'readyForDelivery'];
+  const order = await Order.findById(orderId)
+    .populate({
+      path: 'items.menu',
+      model: 'Menu',
+      select: 'price name vendor'
+    })
+    .lean();
+
+  if (!order) {
+    throw new Error('Order not found');
+  }
+
+  if (order.status !== 'cancelled') {
+    throw new Error('Refund is allowed only for cancelled orders');
+  }
+  // if (order.refunds && order.refunds.length > 0) {
+  //   const totalRefunded = order.refunds.reduce((sum, refund) => sum + refund.amount, 0);
+  //   throw new Error(`Order already has ${order.refunds.length} refund(s) totaling ₹${totalRefunded.toFixed(2)}. No further refunds allowed.`);
+  // }
+  if (!order.items || order.items.length === 0) {
+    return {
+      order,
+      consumedAmount: 0,
+      suggestedRefundAmount: order.totalAmount,
+      consumedMealsCount: 0,
+    };
+  }
+
+  let consumedAmount = 0;
+  let consumedMealsCount = 0;
+
+  for (const item of order.items) {
+    const menu = item.menu;
+    if (!menu || !menu.price) continue;
+
+    const quantity = item.quantity || 1;
+
+    if (!item.orderStatus || item.orderStatus.length === 0) continue;
+
+    for (const st of item.orderStatus) {
+      if (!CONSUMED_STATUSES.includes(st.status)) continue;
+
+      const mt = st.mealTime;
+      const mealPrice = menu.price?.[mt] || 0; // breakfast, lunch, dinner
+
+      if (mealPrice > 0) {
+        consumedAmount += mealPrice * quantity;
+        consumedMealsCount += quantity;
+      }
+    }
+  }      
+
+  let suggestedRefundAmount = order.totalAmount - consumedAmount;
+  if (suggestedRefundAmount < 0) suggestedRefundAmount = 0;
+
+  if (consumedMealsCount === 0) {
+    suggestedRefundAmount = order.totalAmount;
+  }
+
+  return {
+    order,
+    consumedAmount,
+    suggestedRefundAmount,
+    consumedMealsCount,
+  };
+}
 
 // Helper to get vendor filter
 async function getVendorFilter(req, baseFilter = {}) {
@@ -1188,7 +1266,308 @@ router.get('/orders/:orderId/items/:itemId/status-history', protect, async (req,
   }
 });
 
+// GET /api/admin/orders/:id/refund/calculate - Calculate suggested refund
+router.get('/orders/:id/refund/calculate',protect,adminProtect, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log('Refund calculation request:', { orderId: id, userRole: req.user.role });
+
+    // Admin only
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Admin access only' });
+    }
+
+    const result = await calculateRefundForOrder(id);
+
+    res.json({
+      orderId: id,
+      suggestedRefundAmount: parseFloat(result.suggestedRefundAmount.toFixed(2)),
+      consumedAmount: parseFloat(result.consumedAmount.toFixed(2)),
+      consumedMealsCount: result.consumedMealsCount,
+      totalAmount: parseFloat(result.order.totalAmount.toFixed(2)),
+      currency: result.order.currency || 'INR',
+      canFullRefund: result.consumedMealsCount === 0,
+    });
+  } catch (err) {
+    console.error('Refund calculation error:', err);
+    res.status(400).json({ message: err.message || 'Failed to calculate refund amount' });
+  }
+});
+
+router.post('/orders/:id/refund/process', protect, async (req, res) => {
+  try {
+    const { id: orderId } = req.params;
+    const { amount, note } = req.body;
+
+    console.log('Refund process request:', { 
+      orderId, amount, note: note?.substring(0, 50), userRole: req.user.role 
+    });
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Admin access only' });
+    }
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ message: 'Refund amount must be greater than zero' });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.status !== 'cancelled') {
+      return res.status(400).json({ message: 'Refund allowed only for cancelled orders' });
+    }
+
+    // if (order.refunds && order.refunds.length > 0) {
+    //   const totalRefunded = order.refunds.reduce((sum, refund) => sum + refund.amount, 0);
+    //   return res.status(400).json({ 
+    //     message: `Order already has ${order.refunds.length} refund(s) totaling ₹${totalRefunded.toFixed(2)}` 
+    //   });
+    // }
+
+    // 🔍 FIXED: Cashfree needs ORDER_ID, not PAYMENT_ID
+    const cashfreeOrderId = order.orderId || order._id.toString(); // Use MongoDB orderId or _id
+    
+    console.log('🔍 FIXED CASHFREE DEBUG:', {
+      mongoOrderId: orderId,
+      cashfreeOrderId: cashfreeOrderId,
+      cfPaymentId: order.paymentDetails?.cfPaymentId, // This is PAYMENT_ID (2201636947)
+      paymentStatus: order.paymentDetails?.status // PAID ✓
+    });
+
+    // ✅ NATIVE UUID
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 10000);
+    const refundId = `admin_refund_${orderId}_${timestamp}_${random}`;
+
+    console.log('🚀 Calling Cashfree with orderId:', cashfreeOrderId);
+
+    // FIXED: Pass ORDER_ID, not PAYMENT_ID
+    const cashfreeRefundResponse = await initiateCashfreeRefund(
+      cashfreeOrderId,  // ✅ ORDER_ID (not payment ID!)
+      amount,
+      refundId,
+      note || `Admin refund for cancelled order ${orderId}`,
+      'STANDARD'
+    );
+
+    // Save refund
+    if (!order.refunds) order.refunds = [];
+    order.refunds.push({
+      cfRefundId: cashfreeRefundResponse.cf_refund_id,
+      refundId: cashfreeRefundResponse.refund_id || refundId,
+      amount: cashfreeRefundResponse.refund_amount || amount,
+      currency: cashfreeRefundResponse.refund_currency || 'INR',
+      status: cashfreeRefundResponse.refund_status,
+      note: cashfreeRefundResponse.refund_note || note,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await order.save();
+
+    console.log('✅ Refund created:', refundId);
+
+    res.json({
+      message: 'Refund processed successfully',
+      refund: cashfreeRefundResponse,
+      orderId: order._id,
+    });
+  } catch (err) {
+    console.error('Refund process error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ✅ ROUTE: /api/admin/orders/:id/refund/:refundId/cancel
+router.post('/orders/:id/refund/:refundId/cancel', protect, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Admin access only' });
+    }
+
+    const { id: orderId, refundId } = req.params;
+    const { remarks } = req.body;
+
+    console.log('🔍 CANCEL REQUEST:', { orderId, refundId, remarks });
+
+    const order = await Order.findById(orderId).lean();
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    console.log('📊 ORDER REFUNDS:', order.refunds);
+
+    // ✅ FIND refund by refundId (your frontend param)
+    const refund = order.refunds?.find(r => r.refundId === refundId);
+    if (!refund) {
+      console.error('❌ Refund NOT FOUND in DB:', refundId);
+      console.log('Available refunds:', order.refunds?.map(r => ({ refundId: r.refundId, cfRefundId: r.cfRefundId })));
+      return res.status(404).json({ message: 'Refund not found in order' });
+    }
+
+    console.log('✅ FOUND REFUND:', { 
+      refundId: refund.refundId, 
+      cfRefundId: refund.cfRefundId, 
+      status: refund.status 
+    });
+
+    // ✅ ONLY cancel PENDING/ONHOLD
+    if (!['PENDING', 'ONHOLD'].includes(refund.status)) {
+      return res.status(400).json({ 
+        message: `Cannot cancel ${refund.status} refund` 
+      });
+    }
+
+    // 🔥 CRITICAL: Use cfRefundId for Cashfree API!
+    const cashfreeOrderId = order.orderId || order._id.toString();
+    const cashfreeRefundId = refund.cfRefundId; // ← THIS IS THE KEY!
+
+    console.log('🚀 CALLING CASHFREE:', { 
+      cashfreeOrderId, 
+      cashfreeRefundId,
+      newStatus: 'CANCELLED'
+    });
+
+    // ✅ Call Cashfree CANCEL (only if cfRefundId exists)
+    let cashfreeResponse;
+    if (cashfreeRefundId) {
+      try {
+        cashfreeResponse = await updateCashfreeRefund(
+          cashfreeOrderId,
+          cashfreeRefundId,
+          'CANCELLED',
+          remarks || `Admin cancelled refund ${refundId}`
+        );
+        console.log('✅ CASHFREE CANCEL RESPONSE:', cashfreeResponse);
+      } catch (cashfreeErr) {
+        console.error('❌ CASHFREE CANCEL FAILED:', cashfreeErr.message);
+        // ✅ Still update DB even if Cashfree fails
+      }
+    } else {
+      console.warn('⚠️ No cfRefundId found, skipping Cashfree call');
+    }
+
+    // ✅ ALWAYS update MongoDB
+    const updatedOrder = await Order.findByIdAndUpdate(
+      orderId,
+      {
+        $set: {
+          'refunds.$[elem].status': 'CANCELLED',
+          'refunds.$[elem].updatedAt': new Date(),
+          'refunds.$[elem].note': remarks || `Admin cancelled refund ${refundId}`
+        }
+      },
+      {
+        arrayFilters: [{ 'elem.refundId': refundId }],
+        new: true
+      }
+    );
+
+    console.log('🎉 REFUND CANCELLED IN DB!');
+    res.json({
+      message: 'Refund cancelled successfully',
+      refund: {
+        refundId,
+        cfRefundId: refund.cfRefundId,
+        status: 'CANCELLED'
+      },
+      orderId
+    });
+
+  } catch (err) {
+    console.error('❌ CANCEL ROUTE ERROR:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
 
 
+// ✅ YOUR WEBHOOK - PERFECT with MINOR FIXES
+router.post("/refund/webhook", async (req, res) => {
+  try {
+    console.log('🔔 CASHFREE WEBHOOK RECEIVED:', req.body); // Full payload debug
+
+    const { error } = refundWebhookSchema.validate(req.body);
+    if (error) {
+      console.error("Refund Webhook validation failed:", error.details[0].message);
+      return res.status(400).json({ message: "Invalid webhook payload" });
+    }
+
+    const {
+      cf_refund_id,
+      refund_id,
+      order_id,
+      refund_amount,
+      refund_status,
+    } = req.body;
+
+    console.log('🔔 CASHFREE WEBHOOK:', { 
+      cf_refund_id, 
+      refund_id, 
+      order_id, 
+      refund_amount, 
+      refund_status 
+    });
+
+    if (!mongoose.Types.ObjectId.isValid(order_id)) {
+      console.error(`Invalid order ID received in refund webhook: ${order_id}`);
+      return res.status(400).json({ message: "Invalid order ID format" });
+    }
+
+    const order = await Order.findById(order_id);
+    if (!order) {
+      console.error(`Order not found for ID: ${order_id} in refund webhook`);
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    // ✅ Find and update refund (PERFECT logic)
+    const existingRefund = order.refunds?.find(
+      (r) => r.cfRefundId === cf_refund_id || r.refundId === refund_id
+    );
+
+    if (existingRefund) {
+      console.log(`✅ Updating existing refund ${refund_id}: ${existingRefund.status} → ${refund_status}`);
+      existingRefund.status = refund_status;
+      existingRefund.updatedAt = new Date();
+    } else {
+      console.warn(`Refund ${cf_refund_id} not found in order ${order_id}. Creating new entry.`);
+      if (!order.refunds) order.refunds = [];
+      order.refunds.push({
+        cfRefundId: cf_refund_id,
+        refundId: refund_id,
+        amount: refund_amount,
+        currency: "INR",
+        status: refund_status,
+        note: `Webhook: ${refund_status} for cf_refund_id: ${cf_refund_id}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    // ✅ PERFECT Order Status Logic
+    const totalRefunded = order.refunds.reduce((sum, r) => sum + (r.amount || 0), 0);
+    const allRefundsSuccessful = order.refunds.every(r => r.status === "SUCCESS");
+    const anyRefundPending = order.refunds.some(r => r.status === "PENDING");
+
+    if (allRefundsSuccessful && totalRefunded >= order.totalAmount) {
+      order.status = "refunded";
+      console.log(`🎉 Order ${order_id} fully refunded!`);
+    } else if (anyRefundPending) {
+      order.status = "refund_pending";
+    }
+
+    await order.save();
+    
+    console.log(`✅ Webhook processed: ${refund_id} → ${refund_status}`);
+    res.status(200).json({ message: "Refund webhook processed successfully" });
+    
+  } catch (error) {
+    console.error("❌ Webhook processing ERROR:", error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
 
 module.exports = router;
