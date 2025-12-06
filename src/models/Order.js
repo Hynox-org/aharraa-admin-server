@@ -45,24 +45,53 @@ const OrderItemSchema = new mongoose.Schema(
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     skippedDates: [{ type: Date }],
-    selectedMealTimes: [{ type: String, enum: ['Breakfast', 'Lunch', 'Dinner'] }],
+    selectedMealTimes: [
+      { type: String, enum: ["Breakfast", "Lunch", "Dinner"] },
+    ],
     itemTotalPrice: { type: Number, required: true },
     vendor: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Vendor",
       required: true,
     },
-    orderStatus: {
-      type: [{
-        dayDate: { type: Date }, // Actual date (startDate + day offset)
-        statuses: [{
+    orderStatus: [
+      {
+        date: {
+          type: Date,
+          required: true,
+        },
+        mealTime: {
           type: String,
-          enum: ["pending", "confirmed", "delivered", "cancelled", "failed", "readyForDelivery"],
-          default: 'pending'
-        }]
-      }],
-      default: [],
-    },
+          required: true,
+          enum: ["breakfast", "lunch", "dinner"],
+        },
+        status: {
+          type: String,
+          required: true,
+          enum: [
+            "pending",
+            "preparing",
+            "readyForDelivery",
+            "delivered",
+            "cancelled",
+          ],
+          default: "pending",
+        },
+        updatedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        updatedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        notes: {
+          type: String,
+          default: "",
+        },
+      },
+    ],
   },
   { _id: false }
 );
@@ -76,7 +105,14 @@ const OrderSchema = new mongoose.Schema({
   orderDate: { type: Date, required: true }, // Changed to required as it comes from checkoutDate
   status: {
     type: String,
-    enum: ["pending", "confirmed", "delivered", "cancelled", "failed", "readyForDelivery"],
+    enum: [
+      "pending",
+      "confirmed",
+      "delivered",
+      "cancelled",
+      "failed",
+      "readyForDelivery",
+    ],
     default: "pending",
   },
   paymentSessionId: { type: String },
@@ -94,7 +130,9 @@ const OrderSchema = new mongoose.Schema({
   invoiceUrl: { type: String }, // Add invoiceUrl field
   refunds: [{ type: RefundSchema }], // Add a field to store refund details
   isConfirmationEmailSent: { type: Boolean, default: false }, // Add this field to track email status
-  sentVendorNotifications: [{ type: mongoose.Schema.Types.ObjectId, ref: "Vendor" }], // Track vendors who have received notifications
+  sentVendorNotifications: [
+    { type: mongoose.Schema.Types.ObjectId, ref: "Vendor" },
+  ], // Track vendors who have received notifications
 });
 
 module.exports = mongoose.model("Order", OrderSchema);
