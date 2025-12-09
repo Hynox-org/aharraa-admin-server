@@ -39,7 +39,7 @@ async function calculateRefundForOrder(orderId) {
     return {
       success: false,
       message: 'Order not found'
-    };  
+    };
   }
 
   if (order.status !== 'cancelled') {
@@ -52,13 +52,13 @@ async function calculateRefundForOrder(orderId) {
   // ✅ Calculate total already refunded (excluding CANCELLED refunds)
   let totalAlreadyRefunded = 0;
   let activePendingRefunds = 0;
-  
+
   if (order.refunds && order.refunds.length > 0) {
     order.refunds.forEach(refund => {
       // Don't count CANCELLED refunds
       if (refund.status !== 'CANCELLED') {
         totalAlreadyRefunded += refund.amount;
-        
+
         // Count pending refunds separately for info message
         if (['PENDING', 'ONHOLD'].includes(refund.status)) {
           activePendingRefunds += refund.amount;
@@ -66,7 +66,7 @@ async function calculateRefundForOrder(orderId) {
       }
     });
   }
- console.log('Total already refunded (excluding CANCELLED):', totalAlreadyRefunded);
+  console.log('Total already refunded (excluding CANCELLED):', totalAlreadyRefunded);
   // Check if order is fully refunded
   if (totalAlreadyRefunded >= order.totalAmount) {
     return {
@@ -115,7 +115,7 @@ async function calculateRefundForOrder(orderId) {
         consumedMealsCount += quantity;
       }
     }
-  }      
+  }
 
   let suggestedRefundAmount = order.totalAmount - consumedAmount - totalAlreadyRefunded;
   if (suggestedRefundAmount < 0) suggestedRefundAmount = 0;
@@ -128,8 +128,8 @@ async function calculateRefundForOrder(orderId) {
   if (consumedMealsCount === 0) {
     suggestedRefundAmount = order.totalAmount - totalAlreadyRefunded;
   }
-console.log('Calculated consumed amount:', consumedAmount);
-console.log('Calculated suggested refund amount:', suggestedRefundAmount);
+  console.log('Calculated consumed amount:', consumedAmount);
+  console.log('Calculated suggested refund amount:', suggestedRefundAmount);
   return {
     success: true,
     order,
@@ -213,7 +213,7 @@ router.post('/register', protect, async (req, res) => {
 });
 
 // Vendor Creation (no role check here)
-router.post('/vendor/new', protect , async (req, res) => {
+router.post('/vendor/new', protect, async (req, res) => {
   const { name, companyName, email, password } = req.body;
 
   try {
@@ -555,25 +555,25 @@ router.post('/meals', async (req, res) => {
     //   return res.status(401).json({ message: 'Invalid or expired token' });
     // }
 
-    const { 
-      name, 
-      description, 
-      dietPreference, 
-      category, 
-      subProducts = [], 
-      nutritionalDetails, 
-      price, 
-      image, 
-      vendorId 
+    const {
+      name,
+      description,
+      dietPreference,
+      category,
+      subProducts = [],
+      nutritionalDetails,
+      price,
+      image,
+      vendorId
     } = req.body;
 
     // ✅ Validate required fields per schema
-    if (!name || !description || !dietPreference || !category || !nutritionalDetails || 
-        nutritionalDetails.protein === undefined || nutritionalDetails.carbs === undefined || 
-        nutritionalDetails.fats === undefined || nutritionalDetails.calories === undefined ||
-        !price || !image || !vendorId) {
-      return res.status(400).json({ 
-        message: 'Missing required fields: name, description, dietPreference, category, nutritionalDetails (all fields), price, image, vendorId' 
+    if (!name || !description || !dietPreference || !category || !nutritionalDetails ||
+      nutritionalDetails.protein === undefined || nutritionalDetails.carbs === undefined ||
+      nutritionalDetails.fats === undefined || nutritionalDetails.calories === undefined ||
+      !price || !image || !vendorId) {
+      return res.status(400).json({
+        message: 'Missing required fields: name, description, dietPreference, category, nutritionalDetails (all fields), price, image, vendorId'
       });
     }
 
@@ -626,7 +626,7 @@ router.post('/menus', async (req, res) => {
 
     console.log("✅ MENU BODY FULL:", JSON.stringify(req.body, null, 2));
     const body = req.body;
-    
+
     console.log('🔍 name:', body.name);
     console.log('🔍 perDayPrice:', body.perDayPrice);
     console.log('🔍 menuItems length:', body.menuItems?.length);
@@ -642,7 +642,7 @@ router.post('/menus', async (req, res) => {
     //  Schema validation - direct access
     if (!name || perDayPrice === undefined || perDayPrice === null || !menuItems || !vendor) {
       console.log('❌ Validation failed:', { name, perDayPrice, menuItems: !!menuItems, vendor });
-      return res.status(400).json({ 
+      return res.status(400).json({
         message: 'Missing required fields: name, perDayPrice, menuItems, vendor',
         debug: { name, perDayPrice, hasMenuItems: !!menuItems, vendor }
       });
@@ -655,8 +655,8 @@ router.post('/menus', async (req, res) => {
     //  Validate each menu item
     for (const item of menuItems) {
       if (!item.day || !item.category || !item.meal) {
-        return res.status(400).json({ 
-          message: 'Each menu item must have day, category, and meal fields' 
+        return res.status(400).json({
+          message: 'Each menu item must have day, category, and meal fields'
         });
       }
     }
@@ -693,7 +693,7 @@ router.post('/menus', async (req, res) => {
   }
 });
 
-router.patch('/orders/:id/status',protect, async (req, res) => {
+router.patch('/orders/:id/status', protect, async (req, res) => {
   try {
     const { status } = req.body;
     const orderId = req.params.id;
@@ -703,7 +703,7 @@ router.patch('/orders/:id/status',protect, async (req, res) => {
     }
 
     // Allowed statuses by role
-    const adminAllowed = [ 'readyForDelivery', 'delivered', 'cancelled'];
+    const adminAllowed = ['readyForDelivery', 'delivered', 'cancelled'];
     const vendorAllowed = ['readyForDelivery'];
 
     const normalized = status.toString().trim();
@@ -747,6 +747,60 @@ router.patch('/orders/:id/status',protect, async (req, res) => {
   } catch (err) {
     console.error('Update order status error:', err);
     res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Sync Refunds for Order
+router.post('/orders/:id/sync-refunds', protect, async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    console.log('Syncing refunds for order:', orderId);
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    // Determine current order status to check if sync makes sense? 
+    // Usually even if order is not cancelled, maybe some partial refunds exist?
+    // We will just fetch blindly for now.
+
+    const cashfreeRefunds = await getAllCashfreeRefundsForOrder(orderId);
+
+    if (!Array.isArray(cashfreeRefunds)) {
+      // If no refunds or error returning non-array
+      console.warn('getAllCashfreeRefundsForOrder did not return an array:', cashfreeRefunds);
+      return res.status(200).json({
+        message: 'No refunds found or invalid response from gateway',
+        refunds: order.refunds
+      });
+    }
+
+    // Map to our schema
+    const mappedRefunds = cashfreeRefunds.map(cfRefund => ({
+      cfRefundId: cfRefund.cf_refund_id,
+      refundId: cfRefund.refund_id,
+      amount: cfRefund.refund_amount,
+      currency: cfRefund.refund_currency,
+      status: cfRefund.refund_status,
+      note: cfRefund.refund_note,
+      createdAt: cfRefund.created_at ? new Date(cfRefund.created_at) : new Date(),
+    }));
+
+    // Update order
+    order.refunds = mappedRefunds;
+    await order.save();
+
+    res.status(200).json({
+      message: 'Refunds synced successfully',
+      refunds: order.refunds
+    });
+
+  } catch (err) {
+    console.error('Sync refunds error:', err);
+    // If it's a 404 from cashfree (maybe no refunds exist yet), we might just return empty
+    // But better to let the user know if something failed.
+    res.status(500).json({ message: 'Failed to sync refunds', error: err.message });
   }
 });
 
@@ -835,17 +889,17 @@ router.get('/analytics', protect, async (req, res) => {
     if (popularMenuIdsAgg.length > 0) {
       // CASE 1: Vendor has orders - show top 4 popular menus by order count
       const popularMenuIds = popularMenuIdsAgg.map(m => m._id);
-      const popularMenusDocs = await Menu.find({ 
-        _id: { $in: popularMenuIds } 
+      const popularMenusDocs = await Menu.find({
+        _id: { $in: popularMenuIds }
       })
         .select('name perDayPrice')
         .lean();
 
       popularMenus = popularMenusDocs.map(menu => {
-        const menuOrders = popularMenuIdsAgg.find(m => 
+        const menuOrders = popularMenuIdsAgg.find(m =>
           m._id.toString() === menu._id.toString()
         );
-        
+
         return {
           name: menu.name || 'Unknown Menu',
           orders: menuOrders?.ordersCount || 0,
@@ -855,8 +909,8 @@ router.get('/analytics', protect, async (req, res) => {
     } else if (req.user.role === 'vendor' && vendorDoc) {
       // CASE 2: Vendor has no orders - show their 4 most recent menus
       console.log('No orders found, showing vendor\'s recent menus');
-      const vendorMenus = await Menu.find({ 
-        vendor: vendorDoc._id 
+      const vendorMenus = await Menu.find({
+        vendor: vendorDoc._id
       })
         .sort({ createdAt: -1 }) // Most recent first
         .limit(4)
@@ -890,7 +944,7 @@ router.get('/analytics', protect, async (req, res) => {
     };
 
     console.log("response data:", responseData);
-    
+
     res.json(responseData);
 
   } catch (error) {
@@ -959,26 +1013,26 @@ router.get('/orders/items/meal-schedule', protect, async (req, res) => {
     // Helper function to get delivery address
     const getDeliveryAddress = (order, mealTimeLower) => {
       const mealTimeCapitalized = capitalizeFirstLetter(mealTimeLower);
-      
+
       // Priority 1: Check order.deliveryAddresses object
       if (order.deliveryAddresses?.[mealTimeCapitalized]) {
         console.log('Using order.deliveryAddresses for', mealTimeCapitalized);
         return order.deliveryAddresses[mealTimeCapitalized];
       }
-      
+
       // Priority 2: Check order.deliveryAddress (single address)
       if (order.deliveryAddress) {
         console.log('Using order.deliveryAddress for', mealTimeCapitalized);
         return order.deliveryAddress;
       }
-      
+
       // Priority 3: Check user's meal-specific delivery locations
       const userDeliveryKey = `${mealTimeLower}DeliveryLocation`;
       if (order.user?.[userDeliveryKey]) {
         console.log('Using user delivery location for', mealTimeLower, ':', order.user[userDeliveryKey]);
         return order.user[userDeliveryKey];
       }
-      
+
       // Priority 4: Return empty object
       console.log('No delivery address found for', mealTimeLower);
       return {};
@@ -1014,7 +1068,7 @@ router.get('/orders/items/meal-schedule', protect, async (req, res) => {
         // Process each selected meal time
         item.selectedMealTimes?.forEach(mealTime => {
           const mealTimeLower = mealTime.toLowerCase();
-          
+
           // Check current status for this date and meal time
           const currentStatus = item.orderStatus?.find(s => {
             const statusDateString = toDateString(s.date);
@@ -1023,7 +1077,7 @@ router.get('/orders/items/meal-schedule', protect, async (req, res) => {
 
           if (['breakfast', 'lunch', 'dinner'].includes(mealTimeLower)) {
             console.log('Adding item to', mealTimeLower, 'for order', order._id);
-            
+
             // Get delivery address using priority fallback
             const deliveryAddress = getDeliveryAddress(order, mealTimeLower);
 
@@ -1073,37 +1127,37 @@ router.patch('/orders/:orderId/items/:itemId/meal-status', protect, async (req, 
   try {
     const { status, date, mealTime, notes } = req.body;
     const { orderId, itemId } = req.params;
-    
-    console.log('Update meal status request:', { 
-      orderId, 
-      itemId, 
-      status, 
-      date, 
-      mealTime, 
-      userRole: req.user.role 
+
+    console.log('Update meal status request:', {
+      orderId,
+      itemId,
+      status,
+      date,
+      mealTime,
+      userRole: req.user.role
     });
 
     // Validation
     if (!status || !date || !mealTime) {
-      return res.status(400).json({ 
-        message: 'Status, date, and mealTime are required' 
+      return res.status(400).json({
+        message: 'Status, date, and mealTime are required'
       });
     }
 
     const normalizedStatus = status.toString().trim();
     const normalizedMealTime = mealTime.toString().trim().toLowerCase();
-    
+
     // Validate date format (YYYY-MM-DD)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ 
-        message: 'Invalid date format. Use YYYY-MM-DD' 
+      return res.status(400).json({
+        message: 'Invalid date format. Use YYYY-MM-DD'
       });
     }
 
     // Validate meal time
     if (!['breakfast', 'lunch', 'dinner'].includes(normalizedMealTime)) {
-      return res.status(400).json({ 
-        message: 'Invalid meal time. Must be breakfast, lunch, or dinner' 
+      return res.status(400).json({
+        message: 'Invalid meal time. Must be breakfast, lunch, or dinner'
       });
     }
 
@@ -1113,14 +1167,14 @@ router.patch('/orders/:orderId/items/:itemId/meal-status', protect, async (req, 
 
     if (req.user.role === 'admin') {
       if (!adminAllowed.includes(normalizedStatus)) {
-        return res.status(400).json({ 
-          message: 'Invalid status for admin' 
+        return res.status(400).json({
+          message: 'Invalid status for admin'
         });
       }
     } else if (req.user.role === 'vendor') {
       if (!vendorAllowed.includes(normalizedStatus)) {
-        return res.status(400).json({ 
-          message: 'Vendors can only set status to preparing or readyForDelivery' 
+        return res.status(400).json({
+          message: 'Vendors can only set status to preparing or readyForDelivery'
         });
       }
     } else {
@@ -1144,7 +1198,7 @@ router.patch('/orders/:orderId/items/:itemId/meal-status', protect, async (req, 
 
     // Find the specific order item by matching the id field (not _id)
     const orderItem = order.items.find(item => item.id === itemId || item._id?.toString() === itemId);
-    
+
     if (!orderItem) {
       console.log('Order item not found. Available item ids:', order.items.map(i => ({ id: i.id, _id: i._id })));
       return res.status(404).json({ message: 'Order item not found' });
@@ -1167,24 +1221,24 @@ router.patch('/orders/:orderId/items/:itemId/meal-status', protect, async (req, 
     console.log('Date validation - Target:', targetDateString, 'Start:', startDateString, 'End:', endDateString);
 
     if (targetDateString < startDateString || targetDateString > endDateString) {
-      return res.status(400).json({ 
-        message: `Date is outside the plan period (${startDateString} to ${endDateString})` 
+      return res.status(400).json({
+        message: `Date is outside the plan period (${startDateString} to ${endDateString})`
       });
     }
 
     // Check if date is skipped
     const skippedDateStrings = orderItem.skippedDates?.map(d => toDateString(d)) || [];
     if (skippedDateStrings.includes(targetDateString)) {
-      return res.status(400).json({ 
-        message: 'Cannot update status for skipped date' 
+      return res.status(400).json({
+        message: 'Cannot update status for skipped date'
       });
     }
 
     // Check if meal time is selected (case-insensitive)
     const selectedMealTimesLower = orderItem.selectedMealTimes?.map(m => m.toLowerCase()) || [];
     if (!selectedMealTimesLower.includes(normalizedMealTime)) {
-      return res.status(400).json({ 
-        message: `Meal time '${normalizedMealTime}' is not selected for this order item. Selected meal times: ${orderItem.selectedMealTimes?.join(', ')}` 
+      return res.status(400).json({
+        message: `Meal time '${normalizedMealTime}' is not selected for this order item. Selected meal times: ${orderItem.selectedMealTimes?.join(', ')}`
       });
     }
 
@@ -1248,11 +1302,11 @@ router.patch('/orders/:orderId/items/:itemId/meal-status', protect, async (req, 
 router.get('/orders/:orderId/items/:itemId/status-history', protect, async (req, res) => {
   try {
     const { orderId, itemId } = req.params;
-    
-    console.log('Fetch status history request:', { 
-      orderId, 
-      itemId, 
-      userRole: req.user.role 
+
+    console.log('Fetch status history request:', {
+      orderId,
+      itemId,
+      userRole: req.user.role
     });
 
     if (!['vendor', 'admin'].includes(req.user.role)) {
@@ -1279,7 +1333,7 @@ router.get('/orders/:orderId/items/:itemId/status-history', protect, async (req,
 
     // Find the specific order item by matching the id field (not _id)
     const orderItem = order.items.find(item => item.id === itemId || item._id?.toString() === itemId);
-    
+
     if (!orderItem) {
       console.log('Order item not found. Available item ids:', order.items.map(i => ({ id: i.id, _id: i._id })));
       return res.status(404).json({ message: 'Order item not found' });
@@ -1298,7 +1352,7 @@ router.get('/orders/:orderId/items/:itemId/status-history', protect, async (req,
     res.status(200).json({
       orderId: order._id,
       orderItemId: orderItem._id,
-      statusHistory: statusHistory.sort((a, b) => 
+      statusHistory: statusHistory.sort((a, b) =>
         new Date(b.updatedAt) - new Date(a.updatedAt)
       )
     });
@@ -1310,10 +1364,10 @@ router.get('/orders/:orderId/items/:itemId/status-history', protect, async (req,
 });
 
 // GET /api/admin/orders/:id/refund/calculate - Calculate suggested refund
-router.get('/orders/:id/refund/calculate',protect,adminProtect, async (req, res) => {
+router.get('/orders/:id/refund/calculate', protect, adminProtect, async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     console.log('Refund calculation request:', { orderId: id, userRole: req.user.role });
 
     // Admin only
@@ -1340,9 +1394,9 @@ router.get('/orders/:id/refund/calculate',protect,adminProtect, async (req, res)
     });
   } catch (err) {
     console.error('Refund calculation error:', err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: err.message || 'Failed to calculate refund amount' 
+      message: err.message || 'Failed to calculate refund amount'
     });
   }
 });
@@ -1366,7 +1420,7 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
     // ✅ STEP 1: Verify payment was captured in Cashfree
     const cashfreeOrderId = order.orderId || order._id.toString();
     console.log('🔍 Fetching Cashfree order status for:', cashfreeOrderId);
-    
+
     let cfOrder;
     try {
       cfOrder = await getCashfreeOrderDetails(cashfreeOrderId);
@@ -1424,9 +1478,10 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
         }
       }
 
-      // ✅ Calculate total from Cashfree (excluding CANCELLED, FAILED, ONHOLD)
+      // ✅ Calculate total from Cashfree (excluding CANCELLED, FAILED). 
+      // NOTE: We MUST include ONHOLD and PENDING because Cashfree counts them against the balance.
       cashfreeRefundedTotal = cashfreeRefunds
-        .filter(r => !['CANCELLED', 'FAILED', 'ONHOLD'].includes(r.refund_status))
+        .filter(r => !['CANCELLED', 'FAILED'].includes(r.refund_status))
         .reduce((sum, r) => sum + (r.refund_amount || 0), 0);
 
       console.log('💰 Cashfree active refunds total:', cashfreeRefundedTotal);
@@ -1438,12 +1493,12 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
 
     } catch (err) {
       console.error('⚠️ Failed to fetch Cashfree refunds:', err.message);
-      
+
       // ✅ Fallback: Use MongoDB data with warning
       cashfreeRefundedTotal = order.refunds
         ?.filter(r => !['CANCELLED', 'FAILED'].includes(r.status))
         .reduce((sum, r) => sum + r.amount, 0) || 0;
-      
+
       console.warn('⚠️ Using MongoDB refund total as fallback:', cashfreeRefundedTotal);
     }
 
@@ -1479,12 +1534,14 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
 
     // ✅ STEP 4: Initiate refund via Cashfree
     const timestamp = Date.now();
+    // Cashfree refund_id has max 40 chars limit.
+    // "ref_" (4) + last 6 of ID (6) + "_" (1) + timestamp (13) + "_" (1) + rand(4) = ~29-30 chars. Safe.
     const random = Math.floor(Math.random() * 10000);
-    const refundId = `admin_refund_${orderId}_${timestamp}_${random}`;
-    
-    console.log('🚀 Initiating Cashfree refund:', { 
-      cashfreeOrderId, 
-      amount, 
+    const refundId = `ref_${orderId.slice(-6)}_${timestamp}_${random}`;
+
+    console.log('🚀 Initiating Cashfree refund:', {
+      cashfreeOrderId,
+      amount,
       refundId,
       note: note || `Admin refund for order ${orderId}`
     });
@@ -1498,12 +1555,12 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
         note || `Admin refund for order ${orderId}`,
         'STANDARD'
       );
-      
+
       console.log('✅ Cashfree refund created successfully:', cashfreeRefundResponse);
-      
+
     } catch (cfError) {
       console.error('❌ Cashfree refund initiation failed:', cfError.message);
-      
+
       // ❌ Don't save to DB if Cashfree rejected it
       return res.status(500).json({
         success: false,
@@ -1615,14 +1672,14 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
 
 //     if (!cashfreeRefundId) {
 //       console.warn('⚠️ No cfRefundId found - this refund was never created in Cashfree');
-      
+
 //       // Just mark as cancelled in DB
 //       refund.status = 'CANCELLED';
 //       refund.updatedAt = new Date();
 //       if (remarks) refund.note = `${remarks} (No Cashfree ID)`;
-      
+
 //     //   await order.save();
-      
+
 //     //   return res.json({
 //     //     success: true,
 //     //     message: 'Refund cancelled in database (never existed in Cashfree)',
@@ -1723,16 +1780,16 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
 //           'CANCELLED',
 //           remarks || `Admin cancelled refund ${refundId}`
 //         );
-        
+
 //         console.log('✅ CASHFREE CANCEL SUCCESS:', cashfreeResponse);
-        
+
 //         // Update based on Cashfree response
 //         refund.status = cashfreeResponse.refund_status || 'CANCELLED';
 //         refund.updatedAt = new Date();
 //         if (remarks) refund.note = remarks;
-        
+
 //         await order.save();
-        
+
 //         return res.json({
 //           success: true,
 //           message: 'Refund cancelled successfully in both Cashfree and database',
@@ -1744,10 +1801,10 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
 //           },
 //           orderId: order._id
 //         });
-        
+
 //       } catch (cfErr) {
 //         console.error('❌ CASHFREE CANCEL API FAILED:', cfErr.message);
-        
+
 //         // ✅ Cashfree API failed, but update DB anyway
 //         // refund.status = 'CANCELLED';
 //         refund.updatedAt = new Date();
@@ -1756,9 +1813,9 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
 //         } else {
 //           refund.note = `Admin cancelled (Cashfree API failed: ${cfErr.message})`;
 //         }
-        
+
 //         // await order.save();
-        
+
 //         return res.json({
 //           success: false,
 //           message: 'Refund cancelled Cashfree update failed. Please verify in Cashfree dashboard.',
@@ -1772,11 +1829,11 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
 //           orderId: order._id
 //         });
 //       }
-      
+
 //     } else {
 //       // ✅ Refund doesn't exist in Cashfree or not in cancellable state
 //       console.warn('⚠️ Refund not in Cashfree or not cancellable, updating DB only');
-      
+
 //       refund.status = 'CANCELLED';
 //       refund.updatedAt = new Date();
 //       if (remarks) {
@@ -1784,9 +1841,9 @@ router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res
 //       } else {
 //         refund.note = `Admin cancelled (Not found in Cashfree)`;
 //       }
-      
+
 //       await order.save();
-      
+
 //       return res.json({
 //         success: true,
 //         message: 'Refund cancelled in database (not found in Cashfree or already processed)',
@@ -1828,12 +1885,12 @@ router.post("/refund/webhook", async (req, res) => {
       refund_status,
     } = req.body;
 
-    console.log('🔔 CASHFREE WEBHOOK:', { 
-      cf_refund_id, 
-      refund_id, 
-      order_id, 
-      refund_amount, 
-      refund_status 
+    console.log('🔔 CASHFREE WEBHOOK:', {
+      cf_refund_id,
+      refund_id,
+      order_id,
+      refund_amount,
+      refund_status
     });
 
     if (!mongoose.Types.ObjectId.isValid(order_id)) {
@@ -1876,10 +1933,10 @@ router.post("/refund/webhook", async (req, res) => {
       .filter(r => r.status === 'SUCCESS')
       .reduce((sum, r) => sum + (r.amount || 0), 0);
 
-    const allRefundsSettled = order.refunds.every(r => 
+    const allRefundsSettled = order.refunds.every(r =>
       ['SUCCESS', 'CANCELLED', 'FAILED'].includes(r.status)
     );
-    const anyRefundPending = order.refunds.some(r => 
+    const anyRefundPending = order.refunds.some(r =>
       ['PENDING', 'ONHOLD'].includes(r.status)
     );
 
@@ -1896,10 +1953,10 @@ router.post("/refund/webhook", async (req, res) => {
     }
 
     await order.save();
-    
+
     console.log(`✅ Webhook processed: ${refund_id} → ${refund_status}`);
     res.status(200).json({ message: "Refund webhook processed successfully" });
-    
+
   } catch (error) {
     console.error("❌ Webhook processing ERROR:", error);
     res.status(500).json({ message: "Internal Server Error" });
