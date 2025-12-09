@@ -9,7 +9,7 @@ const createCashfreeOrder = async (orderId, orderAmount, customerDetails) => {
   }
 
   const url = process.env.CASHFREE_API_URL || `${cashfreeBaseUrl}/pg/orders`;
-  const xApiVersion = process.env.CASHFREE_API_VERSION || "2025-01-01"; // Updated API Version
+  const xApiVersion = process.env.CASHFREE_API_VERSION || "2025-01-01";
   const xClientId = process.env.CASHFREE_CLIENT_ID;
   const xClientSecret = process.env.CASHFREE_CLIENT_SECRET;
 
@@ -28,10 +28,8 @@ const createCashfreeOrder = async (orderId, orderAmount, customerDetails) => {
     body: JSON.stringify({
       order_id: orderId,
       order_amount: orderAmount,
-      order_currency: "INR", // Assuming INR as default currency
+      order_currency: "INR",
       customer_details: customerDetails,
-      // Add other necessary fields as per Cashfree API documentation
-      // For example, order_meta for return_url, notify_url etc.
       order_meta: {
         return_url: `${process.env.NEXT_FRONTEND_BASE_URL}/order-status/${orderId}`,
         notify_url: `${process.env.BACKEND_BASE_URL}/api/orders/webhook`,
@@ -69,7 +67,7 @@ const getCashfreeOrderDetails = async (orderId) => {
   }
 
   const url = `${cashfreeBaseUrl}/pg/orders/${orderId}`;
-  const xApiVersion = process.env.CASHFREE_API_VERSION || "2025-01-01"; // Updated API Version
+  const xApiVersion = process.env.CASHFREE_API_VERSION || "2025-01-01";
   const xClientId = process.env.CASHFREE_CLIENT_ID;
   const xClientSecret = process.env.CASHFREE_CLIENT_SECRET;
 
@@ -100,11 +98,6 @@ const getCashfreeOrderDetails = async (orderId) => {
     console.error("Error fetching Cashfree order details:", error);
     throw error;
   }
-};
-
-module.exports = {
-  createCashfreeOrder,
-  getCashfreeOrderDetails,
 };
 
 const initiateCashfreeRefund = async (
@@ -153,6 +146,7 @@ const initiateCashfreeRefund = async (
     if (response.ok) {
       return data;
     } else {
+      console.error("Cashfree refund initiation failed:", data);
       throw new Error(`Cashfree API error: ${data.message || "Unknown error"}`);
     }
   } catch (error) {
@@ -235,7 +229,8 @@ const getAllCashfreeRefundsForOrder = async (orderId) => {
     const data = await response.json();
 
     if (response.ok) {
-      return data;
+      // ✅ Return data as-is (can be array or object with array)
+      return data || [];
     } else {
       throw new Error(`Cashfree API error: ${data.message || "Unknown error"}`);
     }
@@ -296,6 +291,7 @@ const updateCashfreeRefund = async (
   }
 };
 
+// ✅ CRITICAL: Single export statement at the end
 module.exports = {
   createCashfreeOrder,
   getCashfreeOrderDetails,

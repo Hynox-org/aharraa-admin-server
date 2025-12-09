@@ -15,13 +15,16 @@ const { supabaseAnon, supabaseServiceRole } = require('../config/supabase');
 const Joi = require("joi");
 // const { v4: uuidv4 } = require("uuid"); // Import UUID for generating unique refund IDs
 // ✅ YOUR CASHFREE UTILS
-const { 
+const {
+  createCashfreeOrder,
+  getCashfreeOrderDetails,
   initiateCashfreeRefund,
+  getCashfreeRefundDetails,
+  getAllCashfreeRefundsForOrder,  // ✅ ADD THIS LINE
   updateCashfreeRefund,
-  getCashfreeRefundDetails 
-} = require('../utils/cashfree');
+} = require('../utils/cashfree');  // Adjust path based on your folder structure
 
-// Refund utility function
+// Refund calculation function
 async function calculateRefundForOrder(orderId) {
   const CONSUMED_STATUSES = ['delivered', 'readyForDelivery'];
   const order = await Order.findById(orderId)
@@ -33,22 +36,60 @@ async function calculateRefundForOrder(orderId) {
     .lean();
 
   if (!order) {
-    throw new Error('Order not found');
+    return {
+      success: false,
+      message: 'Order not found'
+    };  
   }
 
   if (order.status !== 'cancelled') {
-    throw new Error('Refund is allowed only for cancelled orders');
-  }
-  // if (order.refunds && order.refunds.length > 0) {
-  //   const totalRefunded = order.refunds.reduce((sum, refund) => sum + refund.amount, 0);
-  //   throw new Error(`Order already has ${order.refunds.length} refund(s) totaling ₹${totalRefunded.toFixed(2)}. No further refunds allowed.`);
-  // }
-  if (!order.items || order.items.length === 0) {
     return {
+      success: false,
+      message: 'Refund is allowed only for cancelled orders'
+    };
+  }
+  // Calculate total already refunded (excluding cancelled refunds)
+  // ✅ Calculate total already refunded (excluding CANCELLED refunds)
+  let totalAlreadyRefunded = 0;
+  let activePendingRefunds = 0;
+  
+  if (order.refunds && order.refunds.length > 0) {
+    order.refunds.forEach(refund => {
+      // Don't count CANCELLED refunds
+      if (refund.status !== 'CANCELLED') {
+        totalAlreadyRefunded += refund.amount;
+        
+        // Count pending refunds separately for info message
+        if (['PENDING', 'ONHOLD'].includes(refund.status)) {
+          activePendingRefunds += refund.amount;
+        }
+      }
+    });
+  }
+ console.log('Total already refunded (excluding CANCELLED):', totalAlreadyRefunded);
+  // Check if order is fully refunded
+  if (totalAlreadyRefunded >= order.totalAmount) {
+    return {
+      success: false,
+      message: `Order is fully refunded. Total refunded: ₹${totalAlreadyRefunded.toFixed(2)} out of ₹${order.totalAmount.toFixed(2)}. No further refunds allowed.`
+    };
+  }
+  if (!order.items || order.items.length === 0) {
+    const remainingAmount = order.totalAmount - totalAlreadyRefunded;
+    if (remainingAmount === 0) {
+      return {
+        success: false,
+        message: `You have already refunded the full amount. Total refunded: ₹${totalAlreadyRefunded.toFixed(2)}`
+      };
+    }
+    return {
+      success: true,
       order,
       consumedAmount: 0,
-      suggestedRefundAmount: order.totalAmount,
+      suggestedRefundAmount: remainingAmount,
       consumedMealsCount: 0,
+      totalAlreadyRefunded,
+      remainingRefundableAmount: remainingAmount,
     };
   }
 
@@ -76,18 +117,26 @@ async function calculateRefundForOrder(orderId) {
     }
   }      
 
-  let suggestedRefundAmount = order.totalAmount - consumedAmount;
+  let suggestedRefundAmount = order.totalAmount - consumedAmount - totalAlreadyRefunded;
   if (suggestedRefundAmount < 0) suggestedRefundAmount = 0;
-
-  if (consumedMealsCount === 0) {
-    suggestedRefundAmount = order.totalAmount;
+  if (suggestedRefundAmount === 0) {
+    return {
+      success: false,
+      message: `You have already refunded the full eligible amount. Total refunded: ₹${totalAlreadyRefunded.toFixed(2)}`
+    };
   }
-
+  if (consumedMealsCount === 0) {
+    suggestedRefundAmount = order.totalAmount - totalAlreadyRefunded;
+  }
+console.log('Calculated consumed amount:', consumedAmount);
+console.log('Calculated suggested refund amount:', suggestedRefundAmount);
   return {
+    success: true,
     order,
     consumedAmount,
     suggestedRefundAmount,
     consumedMealsCount,
+    totalAlreadyRefunded,
   };
 }
 
@@ -1020,10 +1069,6 @@ router.get('/orders/items/meal-schedule', protect, async (req, res) => {
   }
 });
 
-
-
-
-
 router.patch('/orders/:orderId/items/:itemId/meal-status', protect, async (req, res) => {
   try {
     const { status, date, mealTime, notes } = req.body;
@@ -1200,8 +1245,6 @@ router.patch('/orders/:orderId/items/:itemId/meal-status', protect, async (req, 
   }
 });
 
-
-
 router.get('/orders/:orderId/items/:itemId/status-history', protect, async (req, res) => {
   try {
     const { orderId, itemId } = req.params;
@@ -1279,82 +1322,196 @@ router.get('/orders/:id/refund/calculate',protect,adminProtect, async (req, res)
     }
 
     const result = await calculateRefundForOrder(id);
-
+    if (!result.success) {
+      return res.status(400).json({
+        message: result.message
+      });
+    }
     res.json({
+      // success: true,
       orderId: id,
       suggestedRefundAmount: parseFloat(result.suggestedRefundAmount.toFixed(2)),
       consumedAmount: parseFloat(result.consumedAmount.toFixed(2)),
       consumedMealsCount: result.consumedMealsCount,
       totalAmount: parseFloat(result.order.totalAmount.toFixed(2)),
+      totalAlreadyRefunded: parseFloat((result.totalAlreadyRefunded || 0).toFixed(2)),
       currency: result.order.currency || 'INR',
       canFullRefund: result.consumedMealsCount === 0,
     });
   } catch (err) {
     console.error('Refund calculation error:', err);
-    res.status(400).json({ message: err.message || 'Failed to calculate refund amount' });
+    res.status(500).json({ 
+      success: false,
+      message: err.message || 'Failed to calculate refund amount' 
+    });
   }
 });
 
-router.post('/orders/:id/refund/process', protect, async (req, res) => {
+router.post('/orders/:id/refund/process', protect, adminProtect, async (req, res) => {
   try {
     const { id: orderId } = req.params;
     const { amount, note } = req.body;
 
-    console.log('Refund process request:', { 
-      orderId, amount, note: note?.substring(0, 50), userRole: req.user.role 
-    });
-
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Admin access only' });
-    }
+    console.log('Refund process request:', { orderId, amount, note: note?.substring(0, 50), userRole: req.user.role });
 
     if (!amount || amount <= 0) {
-      return res.status(400).json({ message: 'Refund amount must be greater than zero' });
+      return res.status(400).json({ success: false, message: 'Refund amount must be greater than zero' });
     }
 
     const order = await Order.findById(orderId);
     if (!order) {
-      return res.status(404).json({ message: 'Order not found' });
+      return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
-    if (order.status !== 'cancelled') {
-      return res.status(400).json({ message: 'Refund allowed only for cancelled orders' });
-    }
-
-    // if (order.refunds && order.refunds.length > 0) {
-    //   const totalRefunded = order.refunds.reduce((sum, refund) => sum + refund.amount, 0);
-    //   return res.status(400).json({ 
-    //     message: `Order already has ${order.refunds.length} refund(s) totaling ₹${totalRefunded.toFixed(2)}` 
-    //   });
-    // }
-
-    // 🔍 FIXED: Cashfree needs ORDER_ID, not PAYMENT_ID
-    const cashfreeOrderId = order.orderId || order._id.toString(); // Use MongoDB orderId or _id
+    // ✅ STEP 1: Verify payment was captured in Cashfree
+    const cashfreeOrderId = order.orderId || order._id.toString();
+    console.log('🔍 Fetching Cashfree order status for:', cashfreeOrderId);
     
-    console.log('🔍 FIXED CASHFREE DEBUG:', {
-      mongoOrderId: orderId,
-      cashfreeOrderId: cashfreeOrderId,
-      cfPaymentId: order.paymentDetails?.cfPaymentId, // This is PAYMENT_ID (2201636947)
-      paymentStatus: order.paymentDetails?.status // PAID ✓
+    let cfOrder;
+    try {
+      cfOrder = await getCashfreeOrderDetails(cashfreeOrderId);
+      console.log('📊 Cashfree order status:', cfOrder.order_status);
+    } catch (err) {
+      console.error('❌ Failed to fetch Cashfree order:', err.message);
+      return res.status(500).json({
+        success: false,
+        message: 'Unable to verify payment status with Cashfree'
+      });
+    }
+
+    if (!cfOrder || cfOrder.order_status !== 'PAID') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot refund — order status is '${cfOrder?.order_status || 'UNKNOWN'}', expected 'PAID'`
+      });
+    }
+
+    // ✅ STEP 2: Fetch and sync actual refund state from Cashfree
+    console.log('🔍 Fetching actual Cashfree refund state...');
+    let cashfreeRefunds = [];
+    let cashfreeRefundedTotal = 0;
+
+    try {
+      const cfData = await getAllCashfreeRefundsForOrder(cashfreeOrderId);
+      console.log('📊 Raw Cashfree refunds response:', cfData);
+
+      // Handle different response formats
+      if (Array.isArray(cfData)) {
+        cashfreeRefunds = cfData;
+      } else if (cfData && Array.isArray(cfData.refunds)) {
+        cashfreeRefunds = cfData.refunds;
+      } else if (cfData && cfData.data && Array.isArray(cfData.data)) {
+        cashfreeRefunds = cfData.data;
+      } else {
+        console.warn('⚠️ Unexpected Cashfree refunds response format:', cfData);
+        cashfreeRefunds = [];
+      }
+
+      // ✅ Sync MongoDB with Cashfree status
+      if (cashfreeRefunds.length > 0) {
+        let hasUpdates = false;
+        for (const cfRefund of cashfreeRefunds) {
+          const dbRefund = order.refunds?.find(r => r.cfRefundId === cfRefund.cf_refund_id);
+          if (dbRefund && dbRefund.status !== cfRefund.refund_status) {
+            console.log(`🔄 Auto-sync refund ${cfRefund.cf_refund_id}: ${dbRefund.status} → ${cfRefund.refund_status}`);
+            dbRefund.status = cfRefund.refund_status;
+            dbRefund.updatedAt = new Date();
+            hasUpdates = true;
+          }
+        }
+        if (hasUpdates) {
+          await order.save();
+        }
+      }
+
+      // ✅ Calculate total from Cashfree (excluding CANCELLED, FAILED, ONHOLD)
+      cashfreeRefundedTotal = cashfreeRefunds
+        .filter(r => !['CANCELLED', 'FAILED', 'ONHOLD'].includes(r.refund_status))
+        .reduce((sum, r) => sum + (r.refund_amount || 0), 0);
+
+      console.log('💰 Cashfree active refunds total:', cashfreeRefundedTotal);
+      console.log('📋 Cashfree refunds breakdown:', cashfreeRefunds.map(r => ({
+        id: r.cf_refund_id,
+        amount: r.refund_amount,
+        status: r.refund_status
+      })));
+
+    } catch (err) {
+      console.error('⚠️ Failed to fetch Cashfree refunds:', err.message);
+      
+      // ✅ Fallback: Use MongoDB data with warning
+      cashfreeRefundedTotal = order.refunds
+        ?.filter(r => !['CANCELLED', 'FAILED'].includes(r.status))
+        .reduce((sum, r) => sum + r.amount, 0) || 0;
+      
+      console.warn('⚠️ Using MongoDB refund total as fallback:', cashfreeRefundedTotal);
+    }
+
+    // ✅ STEP 3: Validate new refund amount against captured amount
+    const capturedAmount = cfOrder.order_amount;
+    const availableAmount = capturedAmount - cashfreeRefundedTotal;
+    const newTotal = cashfreeRefundedTotal + amount;
+
+    console.log('💵 Refund validation:', {
+      capturedAmount,
+      alreadyRefunded: cashfreeRefundedTotal,
+      requestedAmount: amount,
+      newTotal,
+      availableAmount
     });
 
-    // ✅ NATIVE UUID
+    if (newTotal > capturedAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Refund exceeds available balance. Order amount: ₹${capturedAmount.toFixed(2)}, Already refunded: ₹${cashfreeRefundedTotal.toFixed(2)}, Available: ₹${availableAmount.toFixed(2)}, Requested: ₹${amount.toFixed(2)}`
+      });
+    }
+
+    // ✅ Additional check: Don't allow if amount is more than available
+    if (amount > availableAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Requested amount ₹${amount.toFixed(2)} exceeds available ₹${availableAmount.toFixed(2)}`
+      });
+    }
+
+    console.log('✅ Validation passed. Proceeding with refund creation...');
+
+    // ✅ STEP 4: Initiate refund via Cashfree
     const timestamp = Date.now();
     const random = Math.floor(Math.random() * 10000);
     const refundId = `admin_refund_${orderId}_${timestamp}_${random}`;
-
-    console.log('🚀 Calling Cashfree with orderId:', cashfreeOrderId);
-
-    // FIXED: Pass ORDER_ID, not PAYMENT_ID
-    const cashfreeRefundResponse = await initiateCashfreeRefund(
-      cashfreeOrderId,  // ✅ ORDER_ID (not payment ID!)
-      amount,
+    
+    console.log('🚀 Initiating Cashfree refund:', { 
+      cashfreeOrderId, 
+      amount, 
       refundId,
-      note || `Admin refund for cancelled order ${orderId}`,
-      'STANDARD'
-    );
+      note: note || `Admin refund for order ${orderId}`
+    });
 
-    // Save refund
+    let cashfreeRefundResponse;
+    try {
+      cashfreeRefundResponse = await initiateCashfreeRefund(
+        cashfreeOrderId,
+        amount,
+        refundId,
+        note || `Admin refund for order ${orderId}`,
+        'STANDARD'
+      );
+      
+      console.log('✅ Cashfree refund created successfully:', cashfreeRefundResponse);
+      
+    } catch (cfError) {
+      console.error('❌ Cashfree refund initiation failed:', cfError.message);
+      
+      // ❌ Don't save to DB if Cashfree rejected it
+      return res.status(500).json({
+        success: false,
+        message: `Cashfree rejected refund: ${cfError.message}`
+      });
+    }
+
+    // ✅ STEP 5: Save refund record in DB (only if Cashfree succeeded)
     if (!order.refunds) order.refunds = [];
     order.refunds.push({
       cfRefundId: cashfreeRefundResponse.cf_refund_id,
@@ -1369,126 +1526,293 @@ router.post('/orders/:id/refund/process', protect, async (req, res) => {
 
     await order.save();
 
-    console.log('✅ Refund created:', refundId);
-
-    res.json({
-      message: 'Refund processed successfully',
-      refund: cashfreeRefundResponse,
-      orderId: order._id,
+    console.log('✅ Refund saved to MongoDB:', {
+      refundId: cashfreeRefundResponse.refund_id,
+      cfRefundId: cashfreeRefundResponse.cf_refund_id,
+      status: cashfreeRefundResponse.refund_status,
+      amount: cashfreeRefundResponse.refund_amount
     });
+
+    return res.json({
+      success: true,
+      message: 'Refund processed successfully',
+      refund: {
+        refundId: cashfreeRefundResponse.refund_id,
+        cfRefundId: cashfreeRefundResponse.cf_refund_id,
+        amount: cashfreeRefundResponse.refund_amount,
+        status: cashfreeRefundResponse.refund_status,
+        currency: cashfreeRefundResponse.refund_currency
+      },
+      orderId: order._id
+    });
+
   } catch (err) {
-    console.error('Refund process error:', err);
-    res.status(500).json({ message: err.message });
+    console.error('❌ Refund process error:', err);
+    return res.status(500).json({
+      success: false,
+      message: err.message || 'Failed to process refund'
+    });
   }
 });
 
 // ✅ ROUTE: /api/admin/orders/:id/refund/:refundId/cancel
-router.post('/orders/:id/refund/:refundId/cancel', protect, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Admin access only' });
-    }
+// router.post('/orders/:id/refund/:refundId/cancel', protect, adminProtect, async (req, res) => {
+//   try {
+//     // if (req.user.role !== 'admin') {
+//     //   return res.status(403).json({ 
+//     //     success: false,
+//     //     message: 'Admin access only' 
+//     //   });
+//     // }
 
-    const { id: orderId, refundId } = req.params;
-    const { remarks } = req.body;
+//     const { id: orderId, refundId } = req.params;
+//     const { remarks } = req.body;
 
-    console.log('🔍 CANCEL REQUEST:', { orderId, refundId, remarks });
+//     console.log('🔍 CANCEL REQUEST:', { orderId, refundId, remarks });
 
-    const order = await Order.findById(orderId).lean();
-    if (!order) {
-      return res.status(404).json({ message: 'Order not found' });
-    }
+//     const order = await Order.findById(orderId);
+//     if (!order) {
+//       return res.status(404).json({ 
+//         success: false,
+//         message: 'Order not found' 
+//       });
+//     }
 
-    console.log('📊 ORDER REFUNDS:', order.refunds);
+//     console.log('📊 ORDER REFUNDS:', order.refunds?.map(r => ({
+//       refundId: r.refundId,
+//       cfRefundId: r.cfRefundId,
+//       status: r.status,
+//       amount: r.amount
+//     })));
 
-    // ✅ FIND refund by refundId (your frontend param)
-    const refund = order.refunds?.find(r => r.refundId === refundId);
-    if (!refund) {
-      console.error('❌ Refund NOT FOUND in DB:', refundId);
-      console.log('Available refunds:', order.refunds?.map(r => ({ refundId: r.refundId, cfRefundId: r.cfRefundId })));
-      return res.status(404).json({ message: 'Refund not found in order' });
-    }
+//     const refund = order.refunds?.find(r => r.refundId === refundId);
+//     if (!refund) {
+//       console.error('❌ Refund NOT FOUND in DB:', refundId);
+//       console.log('Available refund IDs:', order.refunds?.map(r => r.refundId));
+//       return res.status(404).json({ 
+//         success: false,
+//         message: 'Refund not found in order' 
+//       });
+//     }
 
-    console.log('✅ FOUND REFUND:', { 
-      refundId: refund.refundId, 
-      cfRefundId: refund.cfRefundId, 
-      status: refund.status 
-    });
+//     console.log('✅ FOUND REFUND:', {
+//       refundId: refund.refundId,
+//       cfRefundId: refund.cfRefundId,
+//       status: refund.status,
+//       amount: refund.amount
+//     });
 
-    // ✅ ONLY cancel PENDING/ONHOLD
-    if (!['PENDING', 'ONHOLD'].includes(refund.status)) {
-      return res.status(400).json({ 
-        message: `Cannot cancel ${refund.status} refund` 
-      });
-    }
+//     // Only allow cancellation if status is PENDING or ONHOLD
+//     if (!['PENDING', 'ONHOLD'].includes(refund.status)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: `Cannot cancel refund in status '${refund.status}'. Only PENDING or ONHOLD refunds can be cancelled.`
+//       });
+//     }
 
-    // 🔥 CRITICAL: Use cfRefundId for Cashfree API!
-    const cashfreeOrderId = order.orderId || order._id.toString();
-    const cashfreeRefundId = refund.cfRefundId; // ← THIS IS THE KEY!
+//     const cashfreeOrderId = order.orderId || order._id.toString();
+//     const cashfreeRefundId = refund.cfRefundId;
 
-    console.log('🚀 CALLING CASHFREE:', { 
-      cashfreeOrderId, 
-      cashfreeRefundId,
-      newStatus: 'CANCELLED'
-    });
+//     if (!cashfreeRefundId) {
+//       console.warn('⚠️ No cfRefundId found - this refund was never created in Cashfree');
+      
+//       // Just mark as cancelled in DB
+//       refund.status = 'CANCELLED';
+//       refund.updatedAt = new Date();
+//       if (remarks) refund.note = `${remarks} (No Cashfree ID)`;
+      
+//     //   await order.save();
+      
+//     //   return res.json({
+//     //     success: true,
+//     //     message: 'Refund cancelled in database (never existed in Cashfree)',
+//     //     refund: {
+//     //       refundId: refund.refundId,
+//     //       status: refund.status,
+//     //       amount: refund.amount
+//     //     },
+//     //     orderId: order._id
+//     //   });
+//     }
 
-    // ✅ Call Cashfree CANCEL (only if cfRefundId exists)
-    let cashfreeResponse;
-    if (cashfreeRefundId) {
-      try {
-        cashfreeResponse = await updateCashfreeRefund(
-          cashfreeOrderId,
-          cashfreeRefundId,
-          'CANCELLED',
-          remarks || `Admin cancelled refund ${refundId}`
-        );
-        console.log('✅ CASHFREE CANCEL RESPONSE:', cashfreeResponse);
-      } catch (cashfreeErr) {
-        console.error('❌ CASHFREE CANCEL FAILED:', cashfreeErr.message);
-        // ✅ Still update DB even if Cashfree fails
-      }
-    } else {
-      console.warn('⚠️ No cfRefundId found, skipping Cashfree call');
-    }
+//     // ✅ BETTER: Fetch all refunds to find this one
+//     console.log('🔍 Fetching all Cashfree refunds to verify existence...');
+//     let cashfreeHasRefund = false;
+//     let cashfreeRefundStatus = null;
 
-    // ✅ ALWAYS update MongoDB
-    const updatedOrder = await Order.findByIdAndUpdate(
-      orderId,
-      {
-        $set: {
-          'refunds.$[elem].status': 'CANCELLED',
-          'refunds.$[elem].updatedAt': new Date(),
-          'refunds.$[elem].note': remarks || `Admin cancelled refund ${refundId}`
-        }
-      },
-      {
-        arrayFilters: [{ 'elem.refundId': refundId }],
-        new: true
-      }
-    );
+//     try {
+//       const allRefunds = await getAllCashfreeRefundsForOrder(cashfreeOrderId);
+//       console.log('📊 Cashfree refunds response:', allRefunds);
 
-    console.log('🎉 REFUND CANCELLED IN DB!');
-    res.json({
-      message: 'Refund cancelled successfully',
-      refund: {
-        refundId,
-        cfRefundId: refund.cfRefundId,
-        status: 'CANCELLED'
-      },
-      orderId
-    });
+//       // Handle different response formats
+//       let refundsList = [];
+//       if (Array.isArray(allRefunds)) {
+//         refundsList = allRefunds;
+//       } else if (allRefunds?.refunds) {
+//         refundsList = allRefunds.refunds;
+//       } else if (allRefunds?.data) {
+//         refundsList = allRefunds.data;
+//       }
 
-  } catch (err) {
-    console.error('❌ CANCEL ROUTE ERROR:', err);
-    res.status(500).json({ message: err.message });
-  }
-});
+//       console.log('📋 Cashfree refunds list:', refundsList.map(r => ({
+//         cf_refund_id: r.cf_refund_id,
+//         refund_id: r.refund_id,
+//         status: r.refund_status,
+//         amount: r.refund_amount
+//       })));
 
+//       // Find this specific refund in Cashfree
+//       const cfRefund = refundsList.find(r => 
+//         r.cf_refund_id === cashfreeRefundId || 
+//         r.refund_id === refund.refundId
+//       );
+
+//       if (cfRefund) {
+//         cashfreeHasRefund = true;
+//         cashfreeRefundStatus = cfRefund.refund_status;
+//         console.log('✅ Refund found in Cashfree:', {
+//           cf_refund_id: cfRefund.cf_refund_id,
+//           status: cfRefund.refund_status,
+//           amount: cfRefund.refund_amount
+//         });
+
+//         // ✅ Sync status first
+//         if (cfRefund.refund_status !== refund.status) {
+//           console.log(`🔄 Syncing status: ${refund.status} → ${cfRefund.refund_status}`);
+//           refund.status = cfRefund.refund_status;
+//           refund.updatedAt = new Date();
+//           await order.save();
+
+//           // ✅ If already cancelled or completed, don't try to cancel again
+//           if (['CANCELLED', 'SUCCESS', 'FAILED'].includes(cfRefund.refund_status)) {
+//             return res.json({
+//               success: true,
+//               message: `Refund is already ${cfRefund.refund_status} in Cashfree. Database updated.`,
+//               refund: {
+//                 refundId: refund.refundId,
+//                 cfRefundId: refund.cfRefundId,
+//                 status: refund.status,
+//                 amount: refund.amount
+//               },
+//               orderId: order._id
+//             });
+//           }
+//         }
+//       } else {
+//         console.warn('⚠️ Refund not found in Cashfree list');
+//         cashfreeHasRefund = false;
+//       }
+
+//     } catch (err) {
+//       console.error('⚠️ Failed to fetch Cashfree refunds:', err.message);
+//       cashfreeHasRefund = false;
+//     }
+
+//     // ✅ Only try to cancel if refund exists and is cancellable in Cashfree
+//     if (cashfreeHasRefund && ['PENDING', 'ONHOLD'].includes(cashfreeRefundStatus)) {
+//       console.log('🚀 CALLING CASHFREE Cancel API:', {
+//         cashfreeOrderId,
+//         cashfreeRefundId,
+//         currentStatus: cashfreeRefundStatus
+//       });
+
+//       try {
+//         const cashfreeResponse = await updateCashfreeRefund(
+//           cashfreeOrderId,
+//           cashfreeRefundId,
+//           'CANCELLED',
+//           remarks || `Admin cancelled refund ${refundId}`
+//         );
+        
+//         console.log('✅ CASHFREE CANCEL SUCCESS:', cashfreeResponse);
+        
+//         // Update based on Cashfree response
+//         refund.status = cashfreeResponse.refund_status || 'CANCELLED';
+//         refund.updatedAt = new Date();
+//         if (remarks) refund.note = remarks;
+        
+//         await order.save();
+        
+//         return res.json({
+//           success: true,
+//           message: 'Refund cancelled successfully in both Cashfree and database',
+//           refund: {
+//             refundId: refund.refundId,
+//             cfRefundId: refund.cfRefundId,
+//             status: refund.status,
+//             amount: refund.amount
+//           },
+//           orderId: order._id
+//         });
+        
+//       } catch (cfErr) {
+//         console.error('❌ CASHFREE CANCEL API FAILED:', cfErr.message);
+        
+//         // ✅ Cashfree API failed, but update DB anyway
+//         // refund.status = 'CANCELLED';
+//         refund.updatedAt = new Date();
+//         if (remarks) {
+//           refund.note = `${remarks} (Cashfree API failed: ${cfErr.message})`;
+//         } else {
+//           refund.note = `Admin cancelled (Cashfree API failed: ${cfErr.message})`;
+//         }
+        
+//         // await order.save();
+        
+//         return res.json({
+//           success: false,
+//           message: 'Refund cancelled Cashfree update failed. Please verify in Cashfree dashboard.',
+//           warning: cfErr.message,
+//           refund: {
+//             refundId: refund.refundId,
+//             cfRefundId: refund.cfRefundId,
+//             status: refund.status,
+//             amount: refund.amount
+//           },
+//           orderId: order._id
+//         });
+//       }
+      
+//     } else {
+//       // ✅ Refund doesn't exist in Cashfree or not in cancellable state
+//       console.warn('⚠️ Refund not in Cashfree or not cancellable, updating DB only');
+      
+//       refund.status = 'CANCELLED';
+//       refund.updatedAt = new Date();
+//       if (remarks) {
+//         refund.note = `${remarks} (Not found in Cashfree or already processed)`;
+//       } else {
+//         refund.note = `Admin cancelled (Not found in Cashfree)`;
+//       }
+      
+//       await order.save();
+      
+//       return res.json({
+//         success: true,
+//         message: 'Refund cancelled in database (not found in Cashfree or already processed)',
+//         refund: {
+//           refundId: refund.refundId,
+//           cfRefundId: refund.cfRefundId,
+//           status: refund.status,
+//           amount: refund.amount
+//         },
+//         orderId: order._id
+//       });
+//     }
+
+//   }catch (err) {
+//     console.error('❌ CANCEL ROUTE ERROR:', err);
+//     return res.status(500).json({ 
+//       success: false,
+//       message: err.message || 'Internal server error' 
+//     });
+//   }
+// });
 
 // ✅ YOUR WEBHOOK - PERFECT with MINOR FIXES
 router.post("/refund/webhook", async (req, res) => {
   try {
-    console.log('🔔 CASHFREE WEBHOOK RECEIVED:', req.body); // Full payload debug
+    console.log('🔔 CASHFREE WEBHOOK RECEIVED:', req.body);
 
     const { error } = refundWebhookSchema.validate(req.body);
     if (error) {
@@ -1523,7 +1847,7 @@ router.post("/refund/webhook", async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    // ✅ Find and update refund (PERFECT logic)
+    // Find and update refund
     const existingRefund = order.refunds?.find(
       (r) => r.cfRefundId === cf_refund_id || r.refundId === refund_id
     );
@@ -1533,7 +1857,7 @@ router.post("/refund/webhook", async (req, res) => {
       existingRefund.status = refund_status;
       existingRefund.updatedAt = new Date();
     } else {
-      console.warn(`Refund ${cf_refund_id} not found in order ${order_id}. Creating new entry.`);
+      console.warn(`⚠️ Refund ${cf_refund_id} not found in order ${order_id}. Creating new entry.`);
       if (!order.refunds) order.refunds = [];
       order.refunds.push({
         cfRefundId: cf_refund_id,
@@ -1547,16 +1871,28 @@ router.post("/refund/webhook", async (req, res) => {
       });
     }
 
-    // ✅ PERFECT Order Status Logic
-    const totalRefunded = order.refunds.reduce((sum, r) => sum + (r.amount || 0), 0);
-    const allRefundsSuccessful = order.refunds.every(r => r.status === "SUCCESS");
-    const anyRefundPending = order.refunds.some(r => r.status === "PENDING");
+    // ✅ Calculate total SUCCESS refunds only
+    const totalRefundedSuccess = order.refunds
+      .filter(r => r.status === 'SUCCESS')
+      .reduce((sum, r) => sum + (r.amount || 0), 0);
 
-    if (allRefundsSuccessful && totalRefunded >= order.totalAmount) {
+    const allRefundsSettled = order.refunds.every(r => 
+      ['SUCCESS', 'CANCELLED', 'FAILED'].includes(r.status)
+    );
+    const anyRefundPending = order.refunds.some(r => 
+      ['PENDING', 'ONHOLD'].includes(r.status)
+    );
+
+    // Update order status
+    if (allRefundsSettled && totalRefundedSuccess >= order.totalAmount) {
       order.status = "refunded";
       console.log(`🎉 Order ${order_id} fully refunded!`);
+    } else if (allRefundsSettled && totalRefundedSuccess > 0) {
+      order.status = "partially_refunded";
+      console.log(`💰 Order ${order_id} partially refunded: ₹${totalRefundedSuccess}`);
     } else if (anyRefundPending) {
       order.status = "refund_pending";
+      console.log(`⏳ Order ${order_id} has pending refunds`);
     }
 
     await order.save();
