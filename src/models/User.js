@@ -14,6 +14,11 @@ const UserSchema = new mongoose.Schema({
     pincode: { type: String },
     lat: { type: Number },
     lon: { type: Number },
+    deliveryAddressId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryAddress",
+    },
+    selectedTimeSlot: { type: String }, // e.g. "7:00 AM - 7:30 AM"
   },
   lunchDeliveryLocation: {
     street: { type: String },
@@ -21,6 +26,11 @@ const UserSchema = new mongoose.Schema({
     pincode: { type: String },
     lat: { type: Number },
     lon: { type: Number },
+    deliveryAddressId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryAddress",
+    },
+    selectedTimeSlot: { type: String }, // e.g. "12:00 PM - 12:30 PM"
   },
   dinnerDeliveryLocation: {
     street: { type: String },
@@ -28,6 +38,11 @@ const UserSchema = new mongoose.Schema({
     pincode: { type: String },
     lat: { type: Number },
     lon: { type: Number },
+    deliveryAddressId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryAddress",
+    },
+    selectedTimeSlot: { type: String }, // e.g. "7:00 PM - 7:30 PM"
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

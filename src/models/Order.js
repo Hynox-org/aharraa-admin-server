@@ -1,10 +1,27 @@
 const mongoose = require("mongoose");
 
 const AddressSchema = new mongoose.Schema(
+  // {
+  //   street: { type: String, required: true },
+  //   city: { type: String, required: true },
+  //   zip: { type: String, required: true },
+  // },
+  // { _id: false }
   {
+    // Snapshot of the actual delivery address at order time (optional but recommended)
     street: { type: String, required: true },
     city: { type: String, required: true },
     zip: { type: String, required: true },
+
+    // Reference to saved DeliveryAddress (so you can link back to profile address)
+    deliveryAddressId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryAddress",
+      required: true,
+    },
+
+    // Actual time slot chosen during checkout, e.g. "7:00 AM - 9:00 AM"
+    selectedTimeSlot: { type: String, required: true },
   },
   { _id: false }
 );
